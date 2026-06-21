@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 # =====================================================================
-# ⚙️ CONFIGURATION BLOCK
+# CONFIGURATION BLOCK
 # Update these URLs at the start of each new season!
 # =====================================================================
 LEAGUE_CONFIG = {
@@ -54,7 +54,7 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
             
         # Find the actual header row (sheets often have intro text/rules at the top)
         header_idx = 0
-        name_keywords = ['name', 'player', 'sub', 'first']
+        name_keywords = ['name', 'first', 'last']
         rating_keywords = ['rating', 'level', 'skill', 'score', 'pts']
         
         for i in range(min(15, len(raw_df))):
@@ -81,19 +81,24 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
                         return col
             return None
 
-        name_c = find_col(['name', 'player', 'sub'])
+        # Look specifically for First and Last name to avoid capturing "Player Rating"
+        first_c = find_col(['first'])
+        last_c = find_col(['last'])
+        name_c = None
+        
+        if first_c and last_c:
+            sub_df['Name'] = sub_df[first_c].fillna('').astype(str).str.strip() + " " + sub_df[last_c].fillna('').astype(str).str.strip()
+            # Convert empty string names back to NA so dropna can catch them
+            sub_df['Name'] = sub_df['Name'].replace(r'^\s*$', pd.NA, regex=True)
+            name_c = 'Name'
+        else:
+            # Fallback if there is just a single 'Name' column (do not use 'player' here)
+            name_c = find_col(['name', 'sub'])
+
         rating_c = find_col(['rating', 'level', 'skill', 'score'])
         pos_c = find_col(['pos'])
-        phone_c = find_col(['phone', 'cell', 'mobile', 'text'])
+        phone_c = find_col(['cell', 'phone', 'mobile', 'text'])
         email_c = find_col(['email', 'mail'])
-        
-        # Edge case: If they split First and Last name into two columns
-        if not name_c:
-            first_c = find_col(['first'])
-            last_c = find_col(['last'])
-            if first_c and last_c:
-                sub_df['Name'] = sub_df[first_c].astype(str) + " " + sub_df[last_c].astype(str)
-                name_c = 'Name'
 
         # Rename whatever we found to our standard internal names
         rename_dict = {}
@@ -116,7 +121,7 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         # Drop rows where Name is missing
         sub_df = sub_df.dropna(subset=['Name'])
         
-        # Clean up Rating: Extract the first sequence of numbers to avoid turning "85.0" into "850"
+        # Clean up Rating: Extract the first sequence of numbers
         def extract_rating(val):
             match = re.search(r'\d+', str(val))
             return match.group() if match else 0
@@ -196,7 +201,8 @@ st.subheader("Match Parameters")
 param_cols = st.columns(5)
 
 with param_cols[0]:
-    missing_rating = st.number_input("Missing Player Rating", min_value=40, max_value=110, value=85, step=1)
+    # Increased max_value to 400 to accommodate OFHL ratings in the high 200s
+    missing_rating = st.number_input("Missing Player Rating", min_value=40, max_value=400, value=85, step=1)
 
 with param_cols[1]:
     missing_position = st.selectbox("Missing Position", ["Skater (F/D)", "Goalie"])
@@ -205,9 +211,19 @@ with param_cols[2]:
     our_game_date = st.date_input("Game Date", value=datetime.date.today())
 
 with param_cols[3]:
-    # Replaced hardcoded dropdown with a flexible time input with 5 min increments
-    our_game_time = st.time_input("Our Game Time", value=datetime.time(20, 0), step=datetime.timedelta(minutes=5)) 
-    formatted_time = our_game_time.strftime("%I:%M %p").lstrip("0") # Format to e.g. "8:00 PM"
+    # Generate 12-hour AM/PM times with 5 minute increments to bypass 24h local settings
+    time_options = []
+    for h in range(24):
+        for m in range(0, 60, 5):
+            period = "AM" if h < 12 else "PM"
+            display_h = h % 12
+            if display_h == 0: 
+                display_h = 12
+            time_options.append(f"{display_h}:{m:02d} {period}")
+            
+    # Default to 8:00 PM
+    default_idx = time_options.index("8:00 PM")
+    formatted_time = st.selectbox("Our Game Time", time_options, index=default_idx)
 
 with param_cols[4]:
     st.markdown("<br>", unsafe_allow_html=True) # Spacer to align toggles
@@ -223,7 +239,7 @@ st.divider()
 
 # 1. Position Filter
 if missing_position == "Goalie":
-    # Using str.contains to be forgiving of how they type it (e.g. "G", "Goalie", "Netminder")
+    # Using str.contains to be forgiving of how they type it
     filtered_df = df[df['Pos'].astype(str).str.contains('G|Goalie', case=False, na=False)].copy()
 else:
     filtered_df = df[~df['Pos'].astype(str).str.contains('G|Goalie', case=False, na=False)].copy()
