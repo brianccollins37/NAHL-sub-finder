@@ -16,83 +16,6 @@ st.set_page_config(
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/edit?usp=sharing", 
-        "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
-    },
-    "CVHL": {
-        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "YOUR_CVHL_ROSTER_CSV_URL_HERE",
-        "Schedule_Sheet": "YOUR_CVHL_SCHEDULE_CSV_URL_HERE"
-    },
-    "OFHL": {
-        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Roster_Sheet": "YOUR_OFHL_ROSTER_CSV_URL_HERE",
-        "Schedule_Sheet": "YOUR_OFHL_SCHEDULE_CSV_URL_HERE"
-    }
-}
-
-def normalize_name(name):
-    if pd.isna(name): return ""
-    name = str(name).lower()
-    name = re.sub(r'[^\w\s]', '', name)
-    parts = name.split()
-    parts.sort()
-    return " ".join(parts)
-
-@st.cache_data(ttl=600)
-def load_data(league, sub_url, roster_url, schedule_url, check_schedules, target_date):
-    # (Data loading logic remains the same to support the new flat format)
-    # [Rest of your logic here...]
-    # ... (I've included the full file in the artifact block below)
-```
-*(See the artifact block below for the full file content).*
-
-### 2. The Updated README
-Download this as your `README.md` file to keep your instructions clear.
-
-```markdown:Hockey Sub Finder README:README.md
-# 🏒 Hockey Sub Finder
-
-A dynamic filtering dashboard for managing ice hockey team rosters and finding eligible substitute players.
-
-## 📊 Data Formatting
-
-For the app to work seamlessly, ensure your Google Sheets are set to **"Anyone with the link can view"**.
-
-### 1. Roster Sheet Format
-Use a simple "Flat" format (as shown in your team roster sheets).
-
-| Position | Name | Rating | Team |
-| :--- | :--- | :--- | :--- |
-| F | Buonomo, Frank | 108 | Hells Kitchen - Shane |
-| D | Stofka, Misho | 103 | Hells Kitchen - Shane |
-
-### 2. Sub Sheet Format
-The app will automatically find the headers as long as they contain "Name", "Rating", and "Position" keywords.
-
-## 🚀 Deployment
-1. Upload `hockey_sub_finder.py` and `requirements.txt` (containing `pandas`) to your GitHub repo.
-2. Deploy to [Streamlit Community Cloud](https://share.streamlit.io/).
-3. In the "Main file path", enter: `hockey_sub_finder.py`
-
-## 📧 Support
-Contact BC at **[brian.c.collins.37@gmail.com](mailto:brian.c.collins.37@gmail.com)** if your league needs an update to use the system.
-```
-
-### The Full Updated App Code
-I have combined everything into the single file below. You can copy-paste this into your `hockey_sub_finder.py` file on GitHub.
-
-```python:Hockey Sub Finder:hockey_sub_finder.py
-import streamlit as st
-import pandas as pd
-import datetime
-import re
-
-st.set_page_config(page_title="Hockey Sub Finder", layout="wide", initial_sidebar_state="collapsed")
-
-LEAGUE_CONFIG = {
-    "NAHL": {
-        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "YOUR_NAHL_ROSTER_CSV_URL_HERE", 
         "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
     },
@@ -117,8 +40,9 @@ def normalize_name(name):
     return " ".join(parts)
 
 @st.cache_data(ttl=600)
-def load_data(sub_url, roster_url, schedule_url, check_schedules, target_date):
+def load_data(league, sub_url, roster_url, schedule_url, check_schedules, target_date):
     try:
+        # Load Sub Sheet
         raw_df = pd.read_csv(sub_url, header=None)
         header_idx = 0
         for i in range(min(15, len(raw_df))):
@@ -128,9 +52,9 @@ def load_data(sub_url, roster_url, schedule_url, check_schedules, target_date):
                 break
         raw_df.columns = raw_df.iloc[header_idx]
         sub_df = raw_df[header_idx + 1:].reset_index(drop=True)
-        col_map = {str(c).strip().lower(): c for c in sub_df.columns}
         
-        # Mapping standard names
+        # Standardize Columns
+        col_map = {str(c).strip().lower(): c for c in sub_df.columns}
         sub_df = sub_df.rename(columns={
             next((col_map[k] for k in col_map if 'first' in k), None): 'FirstName',
             next((col_map[k] for k in col_map if 'last' in k), None): 'LastName',
@@ -143,16 +67,12 @@ def load_data(sub_url, roster_url, schedule_url, check_schedules, target_date):
         sub_df['Norm_Name'] = sub_df['Name'].apply(normalize_name)
         sub_df['Rating'] = pd.to_numeric(sub_df['Rating'].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0)
         
-        # Load Rosters
+        # Load Roster
         if "YOUR_" not in roster_url:
             roster_df = pd.read_csv(roster_url)
             r_col_map = {str(c).strip().lower(): c for c in roster_df.columns}
-            r_name_c = next((r_col_map[k] for k in r_col_map if 'name' in k), None)
-            r_team_c = next((r_col_map[k] for k in r_col_map if 'team' in k), None)
-            if r_name_c and r_team_c:
-                roster_df['Norm_Name'] = roster_df[r_name_c].apply(normalize_name)
-                team_map = dict(zip(roster_df['Norm_Name'], roster_df[r_team_c]))
-                sub_df['Team'] = sub_df['Norm_Name'].map(team_map).fillna("Unknown")
+            team_map = dict(zip(roster_df[r_col_map['name']].apply(normalize_name), roster_df[r_col_map['team']]))
+            sub_df['Team'] = sub_df['Norm_Name'].map(team_map).fillna("Unknown")
         else:
             sub_df['Team'] = "Unknown"
             
@@ -162,10 +82,11 @@ def load_data(sub_url, roster_url, schedule_url, check_schedules, target_date):
 
 st.title("Hockey Sub Finder")
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
-df, error_msg = load_data(LEAGUE_CONFIG[league]["Sub_Sheet"], LEAGUE_CONFIG[league]["Roster_Sheet"], LEAGUE_CONFIG[league]["Schedule_Sheet"], False, datetime.date.today())
+df, error_msg = load_data(league, LEAGUE_CONFIG[league]["Sub_Sheet"], LEAGUE_CONFIG[league]["Roster_Sheet"], LEAGUE_CONFIG[league]["Schedule_Sheet"], False, datetime.date.today())
 
-if error_msg: st.error(error_msg)
+if error_msg: st.error(f"Live read failed: {error_msg}")
 
+# Roster-First Workflow
 team_list = df['Team'].dropna().unique().tolist()
 selected_team = st.selectbox("Your Team", team_list)
 team_roster = df[df['Team'] == selected_team]
