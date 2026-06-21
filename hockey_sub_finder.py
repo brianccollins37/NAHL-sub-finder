@@ -314,42 +314,39 @@ if selected_team and not roster_df.empty:
 st.caption(
     f"Showing {len(eligible)} eligible sub(s) between {format_rating(min_rating)} and {format_rating(rating_cutoff)}."
 )
-st.dataframe(eligible, width="stretch", hide_index=True)
 
-st.subheader("📱 Quick Contact")
-st.write("Use the copy button in the top right of these boxes to grab all contacts for a group message.")
+# Build interactive columns for 1-click mobile messaging
+column_config = {}
+display_cols = ["Name", "Rating", "Position"]
 
-col1, col2 = st.columns(2)
-with col1:
-    if "Email" in eligible.columns:
-        # Extract valid emails and render as comma-separated string
-        emails = [str(e).strip() for e in eligible["Email"] if pd.notna(e) and str(e).strip()]
-        if emails:
-            st.caption("Emails")
-            st.code(", ".join(emails), language="text")
-            
-            # Native mailto link for mobile
-            mailto_link = f"mailto:?bcc={','.join(emails)}"
-            st.markdown(
-                f'<a href="{mailto_link}" style="display: inline-block; padding: 0.5em 1em; background-color: #0b57d0; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; margin-top: 8px;">📧 Open Email App</a>', 
-                unsafe_allow_html=True
-            )
+if "NA" in eligible.columns:
+    display_cols.append("NA")
 
-with col2:
-    if "Phone" in eligible.columns:
-        # Extract valid phones, strip non-digits (dashes/parentheses) for better mobile compatibility
-        phones = [re.sub(r'[^0-9]', '', str(p)) for p in eligible["Phone"] if pd.notna(p) and str(p).strip()]
-        phones = [p for p in phones if p]
-        if phones:
-            st.caption("Phone Numbers (No spaces - pastes best into iMessage)")
-            st.code(",".join(phones), language="text")
-            
-            # Native SMS link for mobile
-            sms_link = f"sms:{','.join(phones)}"
-            st.markdown(
-                f'<a href="{sms_link}" style="display: inline-block; padding: 0.5em 1em; background-color: #146c2e; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; margin-top: 8px;">💬 Open SMS App</a>', 
-                unsafe_allow_html=True
-            )
+if "Phone" in eligible.columns:
+    display_cols.append("Phone")
+    # Generate SMS links
+    eligible["Send Text"] = eligible["Phone"].apply(
+        lambda x: f"sms:{re.sub(r'[^0-9]', '', str(x))}" if pd.notna(x) and str(x).strip() else None
+    )
+    display_cols.append("Send Text")
+    column_config["Send Text"] = st.column_config.LinkColumn("Text Link", display_text="💬 Text")
+
+if "Email" in eligible.columns:
+    display_cols.append("Email")
+    # Generate Mailto links
+    eligible["Send Email"] = eligible["Email"].apply(
+        lambda x: f"mailto:{str(x).strip()}" if pd.notna(x) and str(x).strip() else None
+    )
+    display_cols.append("Send Email")
+    column_config["Send Email"] = st.column_config.LinkColumn("Email Link", display_text="📧 Email")
+
+# Display the interactive dataframe
+st.dataframe(
+    eligible[display_cols], 
+    width="stretch", 
+    hide_index=True,
+    column_config=column_config
+)
 
 st.markdown("---")
 # Subtle link to the source data
