@@ -37,17 +37,6 @@ LEAGUE_CONFIG = {
     }
 }
 
-# Scheduling rules: Track side games start on the hour/20/40. Road side games stagger by 10 mins.
-TIME_SLOTS = {
-    "8:00 PM (Track Side)": {"offset": 0},
-    "8:10 PM (Road Side)": {"offset": 10},
-    "9:20 PM (Track Side)": {"offset": 80},
-    "9:30 PM (Road Side)": {"offset": 90},
-    "10:40 PM (Track Side)": {"offset": 160},
-    "10:50 PM (Road Side)": {"offset": 170}
-}
-# =====================================================================
-
 @st.cache_data(ttl=600)
 def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool):
     """
@@ -58,6 +47,10 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         # 1. Read the Sub Google Sheet
         sub_df = pd.read_csv(sub_url)
         
+        # Check if Google redirected to an HTML login page (meaning the sheet is private)
+        if any("html" in str(c).lower() for c in sub_df.columns):
+            raise ValueError("Sheet is private. Change sharing to 'Anyone with the link can view'.")
+
         # 2. Fuzzy Column Matching
         # Normalize columns to lowercase strings for easy searching
         col_map = {c: str(c).strip().lower() for c in sub_df.columns}
@@ -117,6 +110,10 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         # Drop anyone who has a 0 rating (usually means the row was just notes/blank)
         sub_df = sub_df[sub_df['Rating'] > 0]
         
+        # If the dataframe is empty after cleaning, throw an error to trigger mock data
+        if sub_df.empty:
+            raise ValueError("No valid players found after filtering. Check column names.")
+
         # 3. Attempt to scrape the Roster/Schedule page if enabled
         if check_schedules and roster_url:
             try:
@@ -132,14 +129,14 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
     except Exception as e:
         # FALLBACK: Generate Mock Data if the Google Sheet URL is invalid/private
         mock_data = [
-            {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM (Track Side)"},
+            {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM"},
             {"Name": "David Jones", "Rating": 85, "Pos": "Defense", "Team": "Ice Hogs", "Phone": "(412) 555-0102", "Email": "djones@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-            {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM (Road Side)"},
+            {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM"},
             {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"}
         ]
-        return pd.DataFrame(mock_data), f"Failed to read live sheet. Showing Mock Data. Error: {str(e)}"
+        return pd.DataFrame(mock_data), f"Showing Mock Data. Live read failed: {str(e)}"
 
-def calculate_status(row, our_date, our_time, check_schedules):
+def calculate_status(row, our_date, our_time_str, check_schedules):
     """Determines the availability status of a player based on time offsets."""
     if not check_schedules:
         return "[!] Schedule Check Disabled"
@@ -151,23 +148,13 @@ def calculate_status(row, our_date, our_time, check_schedules):
     if str(row['Scheduled_Date']) != str(our_date):
         return "[Free]"
 
-    their_time = row['Scheduled_Time']
+    their_time = str(row['Scheduled_Time'])
     
-    if our_time in TIME_SLOTS and their_time in TIME_SLOTS:
-        our_offset = TIME_SLOTS[our_time]['offset']
-        their_offset = TIME_SLOTS[their_time]['offset']
-        time_diff = abs(our_offset - their_offset)
-        
-        if time_diff == 0:
-            return "[X] Unavailable (Exact Conflict)"
-        elif time_diff < 80:
-            return f"[X] Unavailable (Overlaps {their_time})"
-        elif time_diff <= 100:
-            return f"[~] At Rink ({their_time})"
-        else:
-            return f"[i] Playing at {their_time}"
-            
-    return "[?] Unknown Schedule"
+    # Simple string match for schedule conflict
+    if their_time == our_time_str:
+        return f"[X] Unavailable (Plays at {their_time})"
+    else:
+        return f"[i] Playing at {their_time}"
 
 st.title("Hockey Sub Finder")
 st.markdown("Easily find eligible replacements for missing players by filtering ratings, positions, and schedules.")
@@ -201,7 +188,9 @@ with param_cols[2]:
     our_game_date = st.date_input("Game Date", value=datetime.date.today())
 
 with param_cols[3]:
-    our_game_time = st.selectbox("Game Time & Rink", list(TIME_SLOTS.keys()), index=2)
+    # Replaced hardcoded dropdown with a flexible time input
+    our_game_time = st.time_input("Our Game Time", value=datetime.time(20, 0)) # Defaults to 8:00 PM
+    formatted_time = our_game_time.strftime("%I:%M %p").lstrip("0") # Format to e.g. "8:00 PM"
 
 with param_cols[4]:
     st.markdown("<br>", unsafe_allow_html=True) # Spacer to align toggles
@@ -230,7 +219,7 @@ else:
 
 # 3. Schedule Check
 filtered_df['Status'] = filtered_df.apply(
-    lambda row: calculate_status(row, our_game_date, our_game_time, check_schedules), axis=1
+    lambda row: calculate_status(row, our_game_date, formatted_time, check_schedules), axis=1
 )
 
 # Sort the dataframe so Free players are at the top, then At Rink, then Unavailable
