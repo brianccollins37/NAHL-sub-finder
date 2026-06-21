@@ -17,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
@@ -37,7 +36,6 @@ LEAGUE_CONFIG = {
         ],
     },
 }
-
 
 def is_placeholder_url(url):
     return not url or "YOUR_" in url
@@ -80,7 +78,6 @@ def read_table_from_sheet(url, required_headers):
     df.columns = [str(column).strip() for column in df.columns]
     df = df.loc[:, [column for column in df.columns if not column.startswith("Unnamed")]]
     return df
-
 
 def clean_player_name(name):
     name = clean_text(name)
@@ -125,7 +122,6 @@ def canonicalize_team_name(team_name, canonical_team_names):
         for name in canonical_team_names
     }
     return signature_lookup.get(team_signature(team_name), team_name)
-
 
 def normalize_roster(df, canonical_team_names=None):
     column_map = {
@@ -211,7 +207,6 @@ def is_goalie(position):
 def format_rating(value):
     return f"{float(value):g}"
 
-
 st.title("Hockey Sub Finder")
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
 config = LEAGUE_CONFIG[league]
@@ -246,7 +241,6 @@ try:
 except Exception as error:
     roster_error = error
 
-
 st.subheader("1. Select Missing Player")
 
 if not roster_df.empty:
@@ -258,6 +252,10 @@ if not roster_df.empty:
     selected_team = st.selectbox("Select Team", team_list)
 
     team_roster = roster_df[roster_df["Team"] == selected_team].copy()
+    
+    # EXPLICIT SORTING: Ensure highest rated players appear at the top of the dropdown
+    team_roster = team_roster.sort_values(by=["Rating", "Name"], ascending=[False, True])
+    
     team_roster["Label"] = team_roster.apply(
         lambda row: f"{row['Name']} - {row['Position']} - {format_rating(row['Rating'])}",
         axis=1,
@@ -281,7 +279,6 @@ else:
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
     target_position = st.selectbox("Missing Player Position", ["F", "D", "G"])
 
-
 st.subheader("2. Eligible Subs")
 playoffs = st.checkbox("Playoffs")
 rating_cutoff = target_rating - 1 if playoffs else target_rating
@@ -301,3 +298,31 @@ st.caption(
     f"Showing {len(eligible)} eligible sub(s) at rating {format_rating(rating_cutoff)} or below."
 )
 st.dataframe(eligible, width="stretch", hide_index=True)
+
+st.subheader("📱 Quick Contact")
+st.write("Use the copy button in the top right of these boxes to grab all contacts for a group message.")
+
+col1, col2 = st.columns(2)
+with col1:
+    if "Email" in eligible.columns:
+        # Extract valid emails and render as comma-separated string
+        emails = [str(e).strip() for e in eligible["Email"] if pd.notna(e) and str(e).strip()]
+        if emails:
+            st.caption("Emails")
+            st.code(", ".join(emails), language="text")
+
+with col2:
+    if "Phone" in eligible.columns:
+        # Extract valid phones and render as comma-separated string
+        phones = [str(p).strip() for p in eligible["Phone"] if pd.notna(p) and str(p).strip()]
+        if phones:
+            st.caption("Phone Numbers")
+            st.code(", ".join(phones), language="text")
+
+st.markdown("---")
+# Subtle link to the source data
+st.markdown(
+    f"<div style='text-align: center;'><small><b>Need an exception?</b> <br> "
+    f"<a href='{config['Sub_Sheet']}' target='_blank'>View the full {league} Sub List source data</a></small></div>", 
+    unsafe_allow_html=True
+)
