@@ -106,9 +106,12 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         # Drop rows where Name is missing
         sub_df = sub_df.dropna(subset=['Name'])
         
-        # Clean up Rating (Extracts just the numbers, handles cases like "92 (A)")
-        # We wrap 'x' in str() to prevent 'expected string or bytes-like object, got float' errors
-        sub_df['Rating'] = sub_df['Rating'].apply(lambda x: re.sub(r'\D', '', str(x)))
+        # Clean up Rating: Extract the first sequence of numbers to avoid turning "85.0" into "850"
+        def extract_rating(val):
+            match = re.search(r'\d+', str(val))
+            return match.group() if match else 0
+            
+        sub_df['Rating'] = sub_df['Rating'].apply(extract_rating)
         sub_df['Rating'] = pd.to_numeric(sub_df['Rating'], errors='coerce').fillna(0)
         
         # Drop anyone who has a 0 rating (usually means the row was just notes/blank)
