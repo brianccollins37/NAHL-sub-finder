@@ -16,7 +16,7 @@ st.set_page_config(
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/edit?usp=sharing", 
+        "Roster_Sheet": "YOUR_NAHL_ROSTER_CSV_URL_HERE", 
         "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
     },
     "CVHL": {
@@ -32,18 +32,18 @@ LEAGUE_CONFIG = {
 }
 
 @st.cache_data(ttl=600)
-def load_data(league, sub_url):
+def load_data(sub_url):
     """
-    Loads Sub Sheet with fuzzy column matching and guaranteed defaults.
+    Loads Sub Sheet with fuzzy column matching.
     """
     try:
         raw_df = pd.read_csv(sub_url, header=None)
         
-        # 1. Find the header row (skipping junk at the top of Google Sheets)
+        # 1. Find the header row
         header_idx = 0
         for i in range(min(15, len(raw_df))):
             row_str = " ".join(str(x).lower() for x in raw_df.iloc[i].values)
-            if 'name' in row_str and ('rating' in row_str or 'pos' in row_str):
+            if 'name' in row_str and 'rating' in row_str:
                 header_idx = i
                 break
         
@@ -53,7 +53,6 @@ def load_data(league, sub_url):
         # 2. Fuzzy Column Mapping
         col_map = {str(c).strip().lower(): c for c in df.columns}
         
-        # Mapping logic
         def get_col(keywords):
             for k in keywords:
                 for c in col_map:
@@ -63,20 +62,20 @@ def load_data(league, sub_url):
         # Build clean dataframe
         clean_df = pd.DataFrame()
         
-        # Name Logic
-        first = get_col(['first'])
-        last = get_col(['last'])
-        name = get_col(['name'])
-        if first and last:
-            clean_df['Name'] = df[first].astype(str) + " " + df[last].astype(str)
-        else:
-            clean_df['Name'] = df[name]
-            
-        clean_df['Rating'] = pd.to_numeric(df[get_col(['rating'])], errors='coerce').fillna(0)
-        clean_df['Pos'] = df[get_col(['pos', 'position'])]
-        clean_df['Team'] = df[get_col(['team'])] if get_col(['team']) else "Unknown"
-        clean_df['Phone'] = df[get_col(['phone', 'cell'])] if get_col(['phone', 'cell']) else "N/A"
-        clean_df['Email'] = df[get_col(['email'])] if get_col(['email']) else "N/A"
+        # Extract columns
+        name_col = get_col(['name'])
+        rating_col = get_col(['rating'])
+        pos_col = get_col(['pos', 'position'])
+        team_col = get_col(['team'])
+        phone_col = get_col(['phone', 'cell'])
+        email_col = get_col(['email'])
+        
+        clean_df['Name'] = df[name_col]
+        clean_df['Rating'] = pd.to_numeric(df[rating_col].astype(str).str.extract(r'(\d+)', expand=False), errors='coerce').fillna(0)
+        clean_df['Pos'] = df[pos_col] if pos_col else "F"
+        clean_df['Team'] = df[team_col] if team_col else "Unknown"
+        clean_df['Phone'] = df[phone_col] if phone_col else "N/A"
+        clean_df['Email'] = df[email_col] if email_col else "N/A"
         
         return clean_df, None
     except Exception as e:
@@ -86,17 +85,18 @@ st.title("Hockey Sub Finder")
 
 # 1. League Selection
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
-df, error_msg = load_data(league, LEAGUE_CONFIG[league]["Sub_Sheet"])
+df, error_msg = load_data(LEAGUE_CONFIG[league]["Sub_Sheet"])
 
 if error_msg:
     st.error(f"Error loading sheet: {error_msg}")
+    st.stop()
 
-# 2. Safety check: Ensure columns exist before showing UI
+# 2. Safety check
 if 'Name' not in df.columns:
     st.warning("Could not find a 'Name' column in your sheet. Please check the header names.")
     st.stop()
 
-# 3. Roster-First Workflow
+# 3. Roster Workflow
 team_list = df['Team'].dropna().unique().tolist()
 selected_team = st.selectbox("Your Team", team_list)
 team_roster = df[df['Team'] == selected_team]
@@ -111,10 +111,14 @@ player_row = team_roster[team_roster['Name'] == missing_player].iloc[0]
 st.info(f"Targeting: **{missing_player}** (Rating: {player_row['Rating']} | Pos: {player_row['Pos']})")
 
 # 4. Filtering Logic
-filtered_df = df[df['Rating'] <= player_row['Rating']] # Subs equal or lower
-filtered_df = filtered_df[filtered_df['Team'] != selected_team] # Filter out own team
-filtered_df = filtered_df[filtered_df['Pos'] == player_row['Pos']] # Only show same position
+# Filter out current team
+filtered_df = df[df['Team'] != selected_team] 
+# Filter by rating (equal or lower)
+filtered_df = filtered_df[filtered_df['Rating'] <= player_row['Rating']]
+# Filter by position (simple contains)
+filtered_df = filtered_df[filtered_df['Pos'].astype(str).str.contains(str(player_row['Pos'])[0], case=False)]
 
+st.subheader(f"Eligible Subs ({len(filtered_df)})")
 st.dataframe(filtered_df[['Name', 'Team', 'Rating', 'Pos', 'Phone', 'Email']], use_container_width=True)
 
 st.caption("Contact BC at [brian.c.collins.37@gmail.com](mailto:brian.c.collins.37@gmail.com) if your league needs an update to use the system.")
