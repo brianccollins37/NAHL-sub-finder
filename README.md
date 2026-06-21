@@ -18,8 +18,9 @@ OFHL, CVHL, schedule conflict checking, and additional roster/schedule integrati
 - Rating filtering: Shows subs whose rating is equal to or lower than the missing player's rating.
 - Playoffs mode: When `Playoffs` is checked, eligible subs must be at least one rating point lower than the missing player.
 - Position filtering: Goalie replacements only show goalies; skater replacements hide goalies.
+- NAHL eligibility filtering: Only shows sub-list rows where the `NA` column is `Y`.
 - Same-team exclusion: Removes players from the selected missing player's team from the eligible sub list.
-- Contact fields: Displays available contact columns from the sub list, including email, phone, and NA eligibility when present.
+- Contact fields: Displays available contact columns from the sub list, including email, phone, and NA eligibility.
 
 ## Tech Stack
 
@@ -99,12 +100,14 @@ The sub sheet should contain a table with these columns:
 - `Pos` or `Position`
 - `First Name`
 - `Last Name`
+- `NA`
 
 Optional sub sheet columns that will be displayed when present:
 
 - `Email`
 - `Cell Phone`
-- `NA`
+
+For NAHL, `NA` must be `Y` for the player to appear as an eligible sub.
 
 The sheets may contain instruction rows above the actual player table. The app searches for the real header row before loading the table.
 
