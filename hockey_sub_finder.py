@@ -13,63 +13,67 @@ st.set_page_config(
 # =====================================================================
 # CONFIGURATION BLOCK
 # Update these URLs at the start of each new season!
+# Ensure all URLs end with /export?format=csv&gid=[YOUR_GID]
 # =====================================================================
 LEAGUE_CONFIG = {
     "NAHL": {
-        # Ensure the URL ends with /export?format=csv&gid=0
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Seasons": {
-            "Season 54": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-",
-            "Season 53": "https://www.nahlpgh-mgmt.com/page/show/9439981-nahl-nahl-53-"
-        }
+        "Roster_Sheet": "YOUR_NAHL_ROSTER_CSV_URL_HERE", 
+        "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
     },
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Seasons": {
-            "Current Season": "https://www.nahlpgh-mgmt.com/page/show/example_cvhl"
-        }
+        "Roster_Sheet": "YOUR_CVHL_ROSTER_CSV_URL_HERE",
+        "Schedule_Sheet": "YOUR_CVHL_SCHEDULE_CSV_URL_HERE"
     },
     "OFHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Seasons": {
-            "Season 17": "https://www.nahlpgh-mgmt.com/page/show/9489545-ofhl-ofhl-17-"
-        }
+        "Roster_Sheet": "YOUR_OFHL_ROSTER_CSV_URL_HERE",
+        "Schedule_Sheet": "YOUR_OFHL_SCHEDULE_CSV_URL_HERE"
     }
 }
 
-@st.cache_data(ttl=600)
-def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool):
+def normalize_name(name):
     """
-    Attempts to load live data using fuzzy column matching.
-    Returns a tuple of (DataFrame, error_message).
+    Standardizes names to help match between different sheets.
+    Converts "O'Toole, Mike" and "Mike O'Toole" to "mike otoole".
+    """
+    if pd.isna(name): return ""
+    name = str(name).lower()
+    # Remove punctuation
+    name = re.sub(r'[^\w\s]', '', name)
+    # Split, sort alphabetically, and rejoin
+    parts = name.split()
+    parts.sort()
+    return " ".join(parts)
+
+@st.cache_data(ttl=600)
+def load_data(league: str, sub_url: str, roster_url: str, schedule_url: str, check_schedules: bool, target_date: datetime.date):
+    """
+    Loads Sub, Roster, and Schedule data, merging them to determine availability.
     """
     try:
-        # 1. Read the Sub Google Sheet
-        # Read without headers first to scan for the true header row
+        # ==========================================
+        # 1. Parse the Sub Sheet
+        # ==========================================
         raw_df = pd.read_csv(sub_url, header=None)
         
-        # Check if Google redirected to an HTML login page (meaning the sheet is private)
         if raw_df.empty or any("html" in str(c).lower() for c in raw_df.iloc[0].values):
-            raise ValueError("Sheet is private. Change sharing to 'Anyone with the link can view'.")
+            raise ValueError("Sub Sheet is private or invalid.")
             
-        # Find the actual header row (sheets often have intro text/rules at the top)
         header_idx = 0
         name_keywords = ['name', 'first', 'last']
         rating_keywords = ['rating', 'level', 'skill', 'score', 'pts']
         
         for i in range(min(15, len(raw_df))):
             row_str = " ".join(str(x).lower() for x in raw_df.iloc[i].values)
-            # Look for row containing both a name identifier AND a rating identifier
             if any(k in row_str for k in name_keywords) and any(k in row_str for k in rating_keywords):
                 header_idx = i
                 break
                 
-        # Set the columns to the found header row and drop the intro rows
         raw_df.columns = raw_df.iloc[header_idx]
         sub_df = raw_df[header_idx + 1:].reset_index(drop=True)
 
-        # 2. Fuzzy Column Matching
-        # Normalize columns to lowercase strings for easy searching
         col_map = {c: str(c).strip().lower() for c in sub_df.columns}
         sub_df = sub_df.rename(columns=col_map)
         cols = sub_df.columns
@@ -81,18 +85,15 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
                         return col
             return None
 
-        # Look specifically for First and Last name to avoid capturing "Player Rating"
         first_c = find_col(['first'])
         last_c = find_col(['last'])
         name_c = None
         
         if first_c and last_c:
             sub_df['Name'] = sub_df[first_c].fillna('').astype(str).str.strip() + " " + sub_df[last_c].fillna('').astype(str).str.strip()
-            # Convert empty string names back to NA so dropna can catch them
             sub_df['Name'] = sub_df['Name'].replace(r'^\s*$', pd.NA, regex=True)
             name_c = 'Name'
         else:
-            # Fallback if there is just a single 'Name' column (do not use 'player' here)
             name_c = find_col(['name', 'sub'])
 
         rating_c = find_col(['rating', 'level', 'skill', 'score'])
@@ -100,7 +101,6 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         phone_c = find_col(['cell', 'phone', 'mobile', 'text'])
         email_c = find_col(['email', 'mail'])
 
-        # Rename whatever we found to our standard internal names
         rename_dict = {}
         if name_c: rename_dict[name_c] = 'Name'
         if rating_c: rename_dict[rating_c] = 'Rating'
@@ -110,70 +110,108 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         
         sub_df = sub_df.rename(columns=rename_dict)
         
-        # Ensure we have the minimum required columns, filling missing ones safely
-        required_cols = ['Name', 'Rating', 'Pos', 'Phone', 'Email', 'Team', 'Scheduled_Date', 'Scheduled_Time']
-        for col in required_cols:
-            if col not in sub_df.columns:
-                sub_df[col] = "Unknown" if col in ['Team', 'Phone', 'Email'] else None
-                if col == 'Scheduled_Time':
-                    sub_df[col] = "Free"
-        
-        # Drop rows where Name is missing
         sub_df = sub_df.dropna(subset=['Name'])
         
-        # Clean up Rating: Extract the first sequence of numbers
         def extract_rating(val):
             match = re.search(r'\d+', str(val))
             return match.group() if match else 0
             
         sub_df['Rating'] = sub_df['Rating'].apply(extract_rating)
         sub_df['Rating'] = pd.to_numeric(sub_df['Rating'], errors='coerce').fillna(0)
-        
-        # Drop anyone who has a 0 rating (usually means the row was just notes/blank)
         sub_df = sub_df[sub_df['Rating'] > 0]
         
-        # If the dataframe is empty after cleaning, throw an error to trigger mock data
         if sub_df.empty:
-            raise ValueError("No valid players found after filtering. Check column names.")
+            raise ValueError("No valid players found after filtering.")
 
-        # 3. Attempt to scrape the Roster/Schedule page if enabled
-        if check_schedules and roster_url:
-            try:
-                # pandas read_html is incredibly powerful but brittle to website changes.
-                web_tables = pd.read_html(roster_url)
-                # Future expansion: Cross-reference 'web_tables' with 'sub_df' here.
-                pass 
-            except Exception as e:
-                print(f"Schedule scrape bypassed or failed: {e}")
+        # Default columns before applying cross-references
+        sub_df['Team'] = "Unknown"
+        sub_df['Scheduled_Time'] = "Free"
         
+        # Add a normalized name column for merging
+        sub_df['Norm_Name'] = sub_df['Name'].apply(normalize_name)
+
+        # ==========================================
+        # 2. Parse the Roster Sheet (if configured)
+        # ==========================================
+        if "YOUR_" not in roster_url:
+            try:
+                roster_df = pd.read_csv(roster_url)
+                # Looking for standard columns: 'Name', 'Team'
+                # Find columns using basic fuzzy matching
+                r_cols = {str(c).lower(): c for c in roster_df.columns}
+                r_name_c = next((r_cols[k] for k in r_cols if 'name' in k or 'player' in k), None)
+                r_team_c = next((r_cols[k] for k in r_cols if 'team' in k), None)
+                
+                if r_name_c and r_team_c:
+                    roster_df['Norm_Name'] = roster_df[r_name_c].apply(normalize_name)
+                    # Create a dictionary mapping normalized name to team
+                    team_map = dict(zip(roster_df['Norm_Name'], roster_df[r_team_c]))
+                    # Apply team to sub_df where names match
+                    sub_df['Team'] = sub_df['Norm_Name'].map(team_map).fillna("Unknown")
+            except Exception as e:
+                print(f"Failed to load rosters: {e}")
+
+        # ==========================================
+        # 3. Parse the Schedule Sheet (if configured)
+        # ==========================================
+        if check_schedules and "YOUR_" not in schedule_url:
+            try:
+                schedule_df = pd.read_csv(schedule_url)
+                s_cols = {str(c).lower(): c for c in schedule_df.columns}
+                
+                s_date_c = next((s_cols[k] for k in s_cols if 'date' in k), None)
+                s_time_c = next((s_cols[k] for k in s_cols if 'time' in k), None)
+                # Assume home/away or team1/team2
+                s_team_cols = [s_cols[k] for k in s_cols if 'team' in k or 'home' in k or 'away' in k]
+
+                if s_date_c and s_time_c and len(s_team_cols) >= 2:
+                    # Convert dates to match target_date
+                    schedule_df[s_date_c] = pd.to_datetime(schedule_df[s_date_c], errors='coerce').dt.date
+                    
+                    # Filter for only games happening on our target date
+                    todays_games = schedule_df[schedule_df[s_date_c] == target_date]
+                    
+                    # Build a dictionary mapping Team to their scheduled Time
+                    time_map = {}
+                    for _, game in todays_games.iterrows():
+                        time_val = str(game[s_time_c]).strip()
+                        # Clean up formatting (e.g. 8:00PM -> 8:00 PM)
+                        time_val = re.sub(r'(?i)(am|pm)', r' \1', time_val).replace("  ", " ")
+                        
+                        team1 = str(game[s_team_cols[0]]).strip()
+                        team2 = str(game[s_team_cols[1]]).strip()
+                        time_map[team1] = time_val
+                        time_map[team2] = time_val
+
+                    # Assign Scheduled_Time to subs based on their assigned team
+                    sub_df['Scheduled_Time'] = sub_df['Team'].map(time_map).fillna("Free")
+            except Exception as e:
+                print(f"Failed to load schedule: {e}")
+
         return sub_df, None
 
     except Exception as e:
-        # FALLBACK: Generate Mock Data if the Google Sheet URL is invalid/private
         mock_data = [
-            {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM"},
-            {"Name": "David Jones", "Rating": 85, "Pos": "Defense", "Team": "Ice Hogs", "Phone": "(412) 555-0102", "Email": "djones@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-            {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM"},
-            {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"}
+            {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Time": "8:00 PM"},
+            {"Name": "David Jones", "Rating": 85, "Pos": "Defense", "Team": "Ice Hogs", "Phone": "(412) 555-0102", "Email": "djones@example.com", "Scheduled_Time": "Free"},
+            {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Time": "9:30 PM"},
+            {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Time": "Free"}
         ]
         return pd.DataFrame(mock_data), f"Showing Mock Data. Live read failed: {str(e)}"
 
-def calculate_status(row, our_date, our_time_str, check_schedules):
-    """Determines the availability status of a player based on time offsets."""
+def calculate_status(row, our_time_str, check_schedules):
+    """Determines the availability status of a player."""
     if not check_schedules:
         return "[!] Schedule Check Disabled"
     
-    if row['Scheduled_Time'] == "Free" or pd.isna(row['Scheduled_Date']):
-        return "[Free]"
-    
-    # If the dates don't match (and neither is None), they are free today
-    if str(row['Scheduled_Date']) != str(our_date):
+    if row['Scheduled_Time'] == "Free":
         return "[Free]"
 
-    their_time = str(row['Scheduled_Time'])
+    their_time = str(row['Scheduled_Time']).upper()
+    our_time_upper = our_time_str.upper()
     
-    # Simple string match for schedule conflict
-    if their_time == our_time_str:
+    # Exact string match for time conflict
+    if their_time == our_time_upper:
         return f"[X] Unavailable (Plays at {their_time})"
     else:
         return f"[i] Playing at {their_time}"
@@ -185,23 +223,19 @@ col1, col2 = st.columns([1, 1])
 with col1:
     league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
 with col2:
-    # Dynamically populate the season dropdown based on the selected league
-    available_seasons = list(LEAGUE_CONFIG[league]["Seasons"].keys())
-    season = st.selectbox("Season", available_seasons)
+    st.info("Schedule tracking relies on configuring Flat Roster and Schedule Google Sheets in the source code.")
 
-# Grab the correct URLs based on the user's dropdown choices
 current_sub_url = LEAGUE_CONFIG[league]["Sub_Sheet"]
-current_roster_url = LEAGUE_CONFIG[league]["Seasons"][season]
+current_roster_url = LEAGUE_CONFIG[league]["Roster_Sheet"]
+current_schedule_url = LEAGUE_CONFIG[league]["Schedule_Sheet"]
 
 st.divider()
 
 st.subheader("Match Parameters")
 
-# Creating a nice 5-column layout for inputs
 param_cols = st.columns(5)
 
 with param_cols[0]:
-    # Increased max_value to 400 to accommodate OFHL ratings in the high 200s
     missing_rating = st.number_input("Missing Player Rating", min_value=40, max_value=400, value=85, step=1)
 
 with param_cols[1]:
@@ -211,7 +245,6 @@ with param_cols[2]:
     our_game_date = st.date_input("Game Date", value=datetime.date.today())
 
 with param_cols[3]:
-    # Generate 12-hour AM/PM times with 5 minute increments to bypass 24h local settings
     time_options = []
     for h in range(24):
         for m in range(0, 60, 5):
@@ -221,41 +254,35 @@ with param_cols[3]:
                 display_h = 12
             time_options.append(f"{display_h}:{m:02d} {period}")
             
-    # Default to 8:00 PM
     default_idx = time_options.index("8:00 PM")
     formatted_time = st.selectbox("Our Game Time", time_options, index=default_idx)
 
 with param_cols[4]:
-    st.markdown("<br>", unsafe_allow_html=True) # Spacer to align toggles
+    st.markdown("<br>", unsafe_allow_html=True)
     is_playoff_mode = st.toggle("Playoff Mode (Stricter Rating)", value=False)
-    check_schedules = st.toggle("Check Web Schedules", value=True)
+    check_schedules = st.toggle("Check Sub Schedules", value=True)
 
-df, error_msg = load_data(league, current_sub_url, current_roster_url, check_schedules)
+df, error_msg = load_data(league, current_sub_url, current_roster_url, current_schedule_url, check_schedules, our_game_date)
 
 if error_msg:
     st.error(error_msg)
 
 st.divider()
 
-# 1. Position Filter
 if missing_position == "Goalie":
-    # Using str.contains to be forgiving of how they type it
     filtered_df = df[df['Pos'].astype(str).str.contains('G|Goalie', case=False, na=False)].copy()
 else:
     filtered_df = df[~df['Pos'].astype(str).str.contains('G|Goalie', case=False, na=False)].copy()
 
-# 2. Rating Filter
 if is_playoff_mode:
     filtered_df = filtered_df[filtered_df['Rating'] < missing_rating]
 else:
     filtered_df = filtered_df[filtered_df['Rating'] <= missing_rating]
 
-# 3. Schedule Check
 filtered_df['Status'] = filtered_df.apply(
-    lambda row: calculate_status(row, our_game_date, formatted_time, check_schedules), axis=1
+    lambda row: calculate_status(row, formatted_time, check_schedules), axis=1
 )
 
-# Sort the dataframe so Free players are at the top, then At Rink, then Unavailable
 def status_sort_key(status):
     if "[Free]" in status: return 1
     if "[~]" in status: return 2
@@ -264,7 +291,7 @@ def status_sort_key(status):
     return 5
 
 filtered_df['SortOrder'] = filtered_df['Status'].apply(status_sort_key)
-filtered_df = filtered_df.sort_values(['SortOrder', 'Rating'], ascending=[True, False]).drop(columns=['SortOrder'])
+filtered_df = filtered_df.sort_values(['SortOrder', 'Rating'], ascending=[True, False]).drop(columns=['SortOrder', 'Norm_Name'], errors='ignore')
 
 st.subheader(f"Eligible Subs ({len(filtered_df)})")
 st.caption(f"Filtering for {missing_position}s {'<' if is_playoff_mode else '<='} {missing_rating}")
