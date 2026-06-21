@@ -5,7 +5,6 @@ import datetime
 # Set up the page configuration
 st.set_page_config(
     page_title="Hockey Sub Finder",
-    page_icon="🏒",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -33,7 +32,7 @@ if 'urls' not in st.session_state:
 
 # Admin Sidebar
 with st.sidebar:
-    st.header("⚙️ Admin Settings")
+    st.header("Admin Settings")
     st.write("Override default data URLs. Changes apply to your current session.")
     
     st.subheader("NAHL Links")
@@ -49,9 +48,10 @@ with st.sidebar:
     st.session_state.urls["OFHL_ROSTER"] = st.text_input("OFHL Webpage", value=st.session_state.urls["OFHL_ROSTER"])
 
 @st.cache_data(ttl=600)
-def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool) -> pd.DataFrame:
+def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool):
     """
     Attempts to load live data. Falls back to mock data if it fails.
+    Returns a tuple of (DataFrame, error_message) to avoid caching Streamlit UI components.
     """
     try:
         # 1. Read the Sub Google Sheet
@@ -84,7 +84,8 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
                 # For now, we will just rely on the Sub Sheet data and mock schedule defaults.
                 pass 
             except Exception as e:
-                st.toast(f"Could not read schedule from website: {e}", icon="⚠️")
+                # Log to console instead of using st.toast inside a cached function
+                print(f"Could not read schedule from website: {e}")
         
         # Drop rows where Name or Rating is missing
         sub_df = sub_df.dropna(subset=['Name', 'Rating'])
@@ -92,12 +93,9 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         # Ensure Rating is a number
         sub_df['Rating'] = pd.to_numeric(sub_df['Rating'], errors='coerce').fillna(0)
         
-        return sub_df
+        return sub_df, None
 
     except Exception as e:
-        # Show exactly what failed on the screen so we can debug it
-        st.error(f"Failed to load live data for {league}. Ensure the Google Sheet is set to 'Anyone with link can view'. Error details: {e}")
-        
         # FALLBACK: Generate Mock Data
         mock_data = [
             {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM (Track Side)"},
@@ -105,19 +103,19 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
             {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM (Road Side)"},
             {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"}
         ]
-        return pd.DataFrame(mock_data)
+        return pd.DataFrame(mock_data), str(e)
 
 def calculate_status(row, our_date, our_time, check_schedules):
     """Determines the availability status of a player based on time offsets."""
     if not check_schedules:
-        return "⚪ Schedule Check Disabled"
+        return "[!] Schedule Check Disabled"
     
     if row['Scheduled_Time'] == "Free" or pd.isna(row['Scheduled_Date']):
-        return "🟢 Free"
+        return "[Free]"
     
     # If the dates don't match (and neither is None), they are free today
     if str(row['Scheduled_Date']) != str(our_date):
-        return "🟢 Free"
+        return "[Free]"
 
     their_time = row['Scheduled_Time']
     
@@ -127,17 +125,17 @@ def calculate_status(row, our_date, our_time, check_schedules):
         time_diff = abs(our_offset - their_offset)
         
         if time_diff == 0:
-            return "🔴 Unavailable (Exact Conflict)"
+            return "[X] Unavailable (Exact Conflict)"
         elif time_diff < 80:
-            return f"🔴 Unavailable (Overlaps {their_time})"
+            return f"[X] Unavailable (Overlaps {their_time})"
         elif time_diff <= 100:
-            return f"🟡 At Rink ({their_time})"
+            return f"[~] At Rink ({their_time})"
         else:
-            return f"🔵 Playing at {their_time}"
+            return f"[i] Playing at {their_time}"
             
-    return "⚪ Unknown Schedule"
+    return "[?] Unknown Schedule"
 
-st.title("🏒 Hockey Sub Finder")
+st.title("Hockey Sub Finder")
 st.markdown("Easily find eligible replacements for missing players by filtering ratings, positions, and schedules.")
 
 col1, col2 = st.columns([1, 1])
@@ -171,7 +169,11 @@ with param_cols[4]:
     check_schedules = st.toggle("Check Web Schedules", value=True)
 
 # Load data based on league selection and current session state URLs
-df = load_data(league, st.session_state.urls[f"{league}_SUB"], st.session_state.urls[f"{league}_ROSTER"], check_schedules)
+df, error_msg = load_data(league, st.session_state.urls[f"{league}_SUB"], st.session_state.urls[f"{league}_ROSTER"], check_schedules)
+
+# Render error safely outside of the cached function
+if error_msg:
+    st.error(f"Failed to load live data for {league}. Ensure the Google Sheet is set to 'Anyone with link can view'. Error details: {error_msg}")
 
 st.divider()
 
@@ -194,10 +196,10 @@ filtered_df['Status'] = filtered_df.apply(
 
 # Sort the dataframe so Free players are at the top, then At Rink, then Unavailable
 def status_sort_key(status):
-    if "Free" in status: return 1
-    if "At Rink" in status: return 2
-    if "Schedule Check Disabled" in status: return 3
-    if "Playing at" in status: return 4
+    if "[Free]" in status: return 1
+    if "[~]" in status: return 2
+    if "[!]" in status: return 3
+    if "[i]" in status: return 4
     return 5
 
 filtered_df['SortOrder'] = filtered_df['Status'].apply(status_sort_key)
