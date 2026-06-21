@@ -349,9 +349,13 @@ st.dataframe(
 )
 
 st.markdown("---")
+
+# Convert the CSV export link back to a standard Google Sheets viewing link
+sheet_view_link = config['Sub_Sheet'].replace("/export?format=csv&", "/edit?")
+
 # Subtle link to the source data
 st.markdown(
     f"<div style='text-align: center;'><small><b>Need an exception?</b> <br> "
-    f"<a href='{config['Sub_Sheet']}' target='_blank'>View the full {league} Sub List source data</a></small></div>", 
+    f"<a href='{sheet_view_link}' target='_blank'>View the full {league} Sub List source data</a></small></div>", 
     unsafe_allow_html=True
 )
