@@ -279,11 +279,28 @@ else:
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
     target_position = st.selectbox("Missing Player Position", ["F", "D", "G"])
 
-st.subheader("2. Eligible Subs")
-playoffs = st.checkbox("Playoffs")
-rating_cutoff = target_rating - 1 if playoffs else target_rating
 
-eligible = subs_df[subs_df["Rating"] <= rating_cutoff].copy()
+st.subheader("2. Eligible Subs")
+
+col1, col2 = st.columns(2)
+with col1:
+    playoffs = st.checkbox("Playoffs")
+    rating_cutoff = target_rating - 1 if playoffs else target_rating
+
+with col2:
+    # Default min rating to 10 points below the max to prevent massive lists
+    default_min = max(0.0, float(rating_cutoff) - 10.0)
+    min_rating = st.number_input(
+        "Minimum Rating Filter", 
+        min_value=0.0, 
+        max_value=float(rating_cutoff), 
+        value=default_min, 
+        step=1.0, 
+        help="Narrow down your list so you aren't texting 100 people at once."
+    )
+
+# Apply both maximum and minimum rating filters
+eligible = subs_df[(subs_df["Rating"] <= rating_cutoff) & (subs_df["Rating"] >= min_rating)].copy()
 
 if is_goalie(target_position):
     eligible = eligible[eligible["Position"].map(is_goalie)]
@@ -295,7 +312,7 @@ if selected_team and not roster_df.empty:
     eligible = eligible[~eligible["Name"].isin(current_team_names)]
 
 st.caption(
-    f"Showing {len(eligible)} eligible sub(s) at rating {format_rating(rating_cutoff)} or below."
+    f"Showing {len(eligible)} eligible sub(s) between {format_rating(min_rating)} and {format_rating(rating_cutoff)}."
 )
 st.dataframe(eligible, width="stretch", hide_index=True)
 
@@ -310,14 +327,29 @@ with col1:
         if emails:
             st.caption("Emails")
             st.code(", ".join(emails), language="text")
+            
+            # Native mailto link for mobile
+            mailto_link = f"mailto:?bcc={','.join(emails)}"
+            st.markdown(
+                f'<a href="{mailto_link}" style="display: inline-block; padding: 0.5em 1em; background-color: #0b57d0; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; margin-top: 8px;">📧 Open Email App</a>', 
+                unsafe_allow_html=True
+            )
 
 with col2:
     if "Phone" in eligible.columns:
-        # Extract valid phones and render as comma-separated string
-        phones = [str(p).strip() for p in eligible["Phone"] if pd.notna(p) and str(p).strip()]
+        # Extract valid phones, strip non-digits (dashes/parentheses) for better mobile compatibility
+        phones = [re.sub(r'[^0-9]', '', str(p)) for p in eligible["Phone"] if pd.notna(p) and str(p).strip()]
+        phones = [p for p in phones if p]
         if phones:
-            st.caption("Phone Numbers")
-            st.code(", ".join(phones), language="text")
+            st.caption("Phone Numbers (No spaces - pastes best into iMessage)")
+            st.code(",".join(phones), language="text")
+            
+            # Native SMS link for mobile
+            sms_link = f"sms:{','.join(phones)}"
+            st.markdown(
+                f'<a href="{sms_link}" style="display: inline-block; padding: 0.5em 1em; background-color: #146c2e; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; margin-top: 8px;">💬 Open SMS App</a>', 
+                unsafe_allow_html=True
+            )
 
 st.markdown("---")
 # Subtle link to the source data
