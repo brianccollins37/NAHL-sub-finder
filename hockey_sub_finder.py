@@ -1,83 +1,100 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import re
+from io import StringIO
 
-# Set up the page configuration
+import pandas as pd
+import requests
+import streamlit as st
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - only used on machines missing certifi
+    certifi = None
+
+
 st.set_page_config(
     page_title="Hockey Sub Finder",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="collapsed",
 )
 
-# Configuration for Leagues
+
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
-        "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
+        "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE",
     },
-    "OFHL": {
-        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Roster_Sheet": "YOUR_OFHL_ROSTER_CSV_URL_HERE",
-        "Schedule_Sheet": "YOUR_OFHL_SCHEDULE_CSV_URL_HERE"
-    }
 }
 
-def load_data(url):
-    """
-    Loads data and forces headers to a standard format to avoid KeyErrors.
-    """
-    try:
-        df = pd.read_csv(url)
-        # Force column names to capitalized, stripped strings to match the app's expectations
-        df.columns = [str(col).strip().capitalize() for col in df.columns]
-        
-        # Verify required columns exist
-        required = ['Name', 'Team', 'Rating', 'Position']
-        for col in required:
-            if col not in df.columns:
-                # If a column is missing, add it as empty to prevent crashes
-                df[col] = "Unknown"
-        return df
-    except Exception as e:
-        st.error(f"Error loading {url}: {e}")
-        return pd.DataFrame()
 
-# UI Setup
-st.title("Hockey Sub Finder")
-league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
+def is_placeholder_url(url):
+    return not url or "YOUR_" in url
 
-df = load_data(LEAGUE_CONFIG[league]["Sub_Sheet"])
 
-if not df.empty:
-    st.subheader("1. Select Missing Player")
-    
-    # Get unique teams for the dropdown
-    team_list = sorted(df['Team'].dropna().unique().tolist())
-    selected_team = st.selectbox("Select Team", team_list)
-    
-    # Filter for the team
-    team_roster = df[df['Team'] == selected_team]
-    
-    # Select player
-    missing_player = st.selectbox("Missing Player", team_roster['Name'].tolist())
-    player_row = team_roster[team_roster['Name'] == missing_player].iloc[0]
-    
-    st.info(f"Targeting: {missing_player} (Rating: {player_row['Rating']} | Pos: {player_row['Position']})")
-    
-    # Filtering Logic
-    eligible = df[df['Team'] != selected_team]
-    eligible = eligible[eligible['Rating'].astype(float) <= float(player_row['Rating'])]
-    
-    # Position logic
-    is_goalie = 'G' in str(player_row['Position']).upper()
-    if is_goalie:
-        eligible = eligible[eligible['Position'].astype(str).str.contains('G', case=False)]
-    else:
-        eligible = eligible[~eligible['Position'].astype(str).str.contains('G', case=False)]
+@st.cache_data(ttl=300)
+def fetch_csv_text(url):
+    if is_placeholder_url(url):
+        raise ValueError("This sheet URL is still a placeholder.")
 
-    st.subheader(f"Eligible Subs ({len(eligible)})")
-    st.dataframe(eligible[['Name', 'Team', 'Rating', 'Position']], use_container_width=True)
-else:
-    st.warning("Data could not be loaded. Please check your Google Sheet format.")
+    verify = certifi.where() if certifi else True
+    response = requests.get(url, timeout=20, verify=verify)
+    response.raise_for_status()
+    return response.text
+
+
+def find_header_row(rows, required_headers):
+    required = {header.lower() for header in required_headers}
+
+    for index, row in enumerate(rows):
+        normalized = {str(cell).strip().lower() for cell in row if str(cell).strip()}
+        if required.issubset(normalized):
+            return index
+
+    return None
+
+
+def read_table_from_sheet(url, required_headers):
+    csv_text = fetch_csv_text(url)
+    raw_rows = pd.read_csv(StringIO(csv_text), header=None, dtype=str).fillna("")
+    header_row = find_header_row(raw_rows.values.tolist(), required_headers)
+
+    if header_row is None:
+        raise ValueError(
+            "Could not find a table header containing: "
+            + ", ".join(required_headers)
+        )
+
+    df = pd.read_csv(StringIO(csv_text), header=header_row, dtype=str).fillna("")
+    df.columns = [str(column).strip() for column in df.columns]
+    df = df.loc[:, [column for column in df.columns if not column.startswith("Unnamed")]]
+    return df
+
+
+def clean_player_name(name):
+    name = str(name).strip()
+    if "," not in name:
+        return name
+
+    last, first = [part.strip() for part in name.split(",", 1)]
+    return f"{first} {last}".strip()
+
+
+def normalize_roster(df):
+    column_map = {
+        "Position": "Position",
+        "Name": "Name",
+        "Rating": "Rating",
+        "Rating ": "Rating",
+        "Team": "Team",
+    }
+
+    df = df.rename(columns={column: column_map.get(column, column) for column in df.columns})
+    required = ["Name", "Team", "Rating", "Position"]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError("Roster sheet is missing: " + ", ".join(missing))
+
+    roster = df[required].copy()
+    roster["Name"] = roster["Name"].map(clean_player_name)
+    roster["Team"] = roster["Team"].astype(str).str.strip()
+    roster["Position"] = roster["Position"].astype(str).str.strip()
+    roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
