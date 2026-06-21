@@ -1,81 +1,35 @@
-🏒 Hockey Sub Finder
+4. [cite_start]Go to share.streamlit.io, log in with GitHub, and click New App. [cite: 16]
+5. [cite_start]Select your repository, type `hockey_sub_finder.py` as the Main file path, and click Deploy. [cite: 17]
 
-A Streamlit web application designed to take the headache out of finding eligible substitute players for amateur adult hockey leagues (e.g., NAHL, CVHL, OFHL).
+## Data Formatting Notes
+[cite_start]For the app to read your live Google Sheets seamlessly, ensure the sharing settings on the sheet are set to "Anyone with the link can view". [cite: 19]
 
-The app cross-references live sub lists (Google Sheets) with league schedules and rosters to ensure you find a player who matches your team's needs, fits the rating rules, and isn't already playing a game at the same time.
+[cite_start]In your `hockey_sub_finder.py` configuration block, ensure your URLs end with `/export?format=csv&gid=0` (the gid number at the end changes depending on which specific tab in the Google Sheet you are linking to). [cite: 20, 21]
 
-✨ Features
+### 1. The Roster Sheet
+The roster sheet needs to be a "flat" database. [cite_start]Do not use merged cells, blank spacer rows, or split teams horizontally across the page. [cite: 23] [cite_start]Put all players in one continuous, vertical list. [cite: 24]
 
-Dynamic Rating Rules: Filters subs based on the missing player's rating. Includes a "Playoff Mode" toggle for stricter rating requirements.
+| Name | Team | Rating | Pos |
+| :--- | :--- | :--- | :--- |
+| Mike O'Toole | No Regretskys | 95 | F |
+| Brian Collins | Goal Diggers | 87 | G |
+| Justin Kenepp | Goal Diggers | 104 | D |
+| Tim Wilson | No Regretskys | 108 | [cite_start]D | [cite: 28]
 
-Position Filtering: Easily swap between searching for Skaters (Forwards/Defense) or Goalies.
+### 2. The Sub Sheet
+[cite_start]The app is designed to natively parse the standard sub sheets provided by the league. [cite: 31] [cite_start]It intelligently skips the instructional text at the top and looks for a row containing names and ratings. [cite: 32] [cite_start]Ensure columns roughly match: First Name, Last Name, Player Rating, Position, Email, Cell Phone. [cite: 33]
 
-Smart Schedule Checking: Calculates time offsets between games to flag players who have exact schedule conflicts, or highlights players who will already be "At the Rink" playing in an adjacent time slot.
+### 3. The Schedule Sheet (Advanced/Optional)
+[cite_start]To use the advanced schedule conflict tracking, format a Google Sheet tab like this (ensure the time format matches what is in your app's drop-down): [cite: 34, 35]
 
-Live Data Integration: Pulls sub data directly from published Google Sheets and scrapes team rosters from league webpages using Pandas.
+| Date | Time | Away Team | Home Team |
+| :--- | :--- | :--- | :--- |
+| 2026-06-25 | 8:00 PM (Track Side) | Goal Diggers | Puck Hounds |
+| 2026-06-25 | 8:10 PM (Road Side) | Ice Hogs | [cite_start]Lumberjacks | [cite: 37]
 
-Admin Settings UI: No hardcoding required! Change the target Google Sheet or Roster URLs directly from a collapsible sidebar in the app. Changes apply instantly to your session.
+## License
+[cite_start]This project is licensed under the MIT License - see the LICENSE file for details. [cite: 38, 39]
+"""
 
-Failsafe Mock Data: If the app cannot reach the live URLs (due to permissions or network issues), it automatically loads realistic mock data so the app won't crash.
-
-🛠️ Tech Stack
-
-Python
-
-Streamlit (for the frontend and hosting)
-
-Pandas & lxml (for data manipulation and web scraping)
-
-🚀 Running Locally
-
-If you want to test or develop the app on your own machine:
-
-Clone the repository:
-
-git clone https://github.com/YOUR-USERNAME/hockey-sub-finder.git
-cd hockey-sub-finder
-
-
-Install the dependencies:
-Make sure you have Python installed, then run:
-
-pip install -r requirements.txt
-
-
-Run the app:
-
-streamlit run hockey_sub_finder.py
-
-
-The app will open automatically in your default web browser.
-
-☁️ Deploying to Streamlit Community Cloud
-
-This app is designed to be hosted for free on Streamlit Community Cloud.
-
-Ensure your repository contains hockey_sub_finder.py and requirements.txt.
-
-Go to share.streamlit.io and log in with your GitHub account.
-
-Click "New App".
-
-Select your hockey-sub-finder repository.
-
-Set the Main file path to hockey_sub_finder.py.
-
-Click Deploy.
-
-Important Note on Dependencies:
-Ensure your requirements.txt file contains the following exactly, otherwise the live web-scraping will fail:
-
-pandas
-lxml
-
-
-📊 Data Formatting Notes
-
-For the app to read your live Google Sheets, ensure the sharing settings on the sheet are set to "Anyone with the link can view". The app currently expects columns for Player Name, Rating, Pos (Position), and Contact Information.
-
-📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+with open("hockey_sub_finder.md", "w") as f:
+    f.write(markdown_content)
