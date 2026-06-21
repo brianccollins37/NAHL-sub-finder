@@ -3,7 +3,7 @@ import re
 
 import pandas as pd
 import requests
-import streamlit as st 
+import streamlit as st
 
 try:
     import certifi
@@ -23,6 +23,16 @@ LEAGUE_CONFIG = {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
         "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE",
+        "Team_Names": [
+            "Hells Kitchen - Shane",
+            "No Regretskys - Deemer",
+            "VIP After Hours - Ruefle",
+            "Disco Biscuits - Hilborn",
+            "8 Ball - Stevo",
+            "Goal Diggers - BC",
+            "5 Hole Strut - Ulrich",
+            "Funkytown - Murawski",
+        ],
     },
 }
 
@@ -84,7 +94,34 @@ def clean_text(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
-def normalize_roster(df):
+def team_signature(team_name):
+    team_name = clean_text(team_name)
+    parts = [part.strip() for part in team_name.split(" - ", 1)]
+    team_part = re.sub(r"^\d+\s+", "", parts[0]).strip()
+
+    if len(parts) == 1:
+        return team_part.lower()
+
+    return f"{team_part} - {parts[1]}".lower()
+
+
+def canonicalize_team_name(team_name, canonical_team_names):
+    team_name = clean_text(team_name)
+    if not canonical_team_names:
+        return team_name
+
+    canonical_lookup = {clean_text(name): clean_text(name) for name in canonical_team_names}
+    if team_name in canonical_lookup:
+        return canonical_lookup[team_name]
+
+    signature_lookup = {
+        team_signature(name): clean_text(name)
+        for name in canonical_team_names
+    }
+    return signature_lookup.get(team_signature(team_name), team_name)
+
+
+def normalize_roster(df, canonical_team_names=None):
     column_map = {
         "Position": "Position",
         "Name": "Name",
@@ -101,7 +138,9 @@ def normalize_roster(df):
 
     roster = df[required].copy()
     roster["Name"] = roster["Name"].map(clean_player_name)
-    roster["Team"] = roster["Team"].map(clean_text)
+    roster["Team"] = roster["Team"].map(
+        lambda team_name: canonicalize_team_name(team_name, canonical_team_names)
+    )
     roster["Position"] = roster["Position"].map(clean_text)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
     roster = roster.dropna(subset=["Name", "Team", "Rating", "Position"])
@@ -144,9 +183,9 @@ def normalize_subs(df):
     return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
 
 
-def load_roster(url):
+def load_roster(url, canonical_team_names=None):
     df = read_table_from_sheet(url, required_headers=["Position", "Name", "Team"])
-    return normalize_roster(df)
+    return normalize_roster(df, canonical_team_names)
 
 
 def load_subs(url):
@@ -177,7 +216,7 @@ roster_df = pd.DataFrame()
 roster_error = None
 
 try:
-    roster_df = load_roster(config["Roster_Sheet"])
+    roster_df = load_roster(config["Roster_Sheet"], config.get("Team_Names"))
 except Exception as error:
     roster_error = error
 
@@ -185,7 +224,11 @@ except Exception as error:
 st.subheader("1. Select Missing Player")
 
 if not roster_df.empty:
-    team_list = sorted(roster_df["Team"].dropna().drop_duplicates().tolist())
+    team_list = [
+        team_name
+        for team_name in config.get("Team_Names", sorted(roster_df["Team"].drop_duplicates()))
+        if team_name in set(roster_df["Team"])
+    ]
     selected_team = st.selectbox("Select Team", team_list)
 
     team_roster = roster_df[roster_df["Team"] == selected_team].copy()
