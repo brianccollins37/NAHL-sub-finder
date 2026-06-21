@@ -45,11 +45,28 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
     """
     try:
         # 1. Read the Sub Google Sheet
-        sub_df = pd.read_csv(sub_url)
+        # Read without headers first to scan for the true header row
+        raw_df = pd.read_csv(sub_url, header=None)
         
         # Check if Google redirected to an HTML login page (meaning the sheet is private)
-        if any("html" in str(c).lower() for c in sub_df.columns):
+        if raw_df.empty or any("html" in str(c).lower() for c in raw_df.iloc[0].values):
             raise ValueError("Sheet is private. Change sharing to 'Anyone with the link can view'.")
+            
+        # Find the actual header row (sheets often have intro text/rules at the top)
+        header_idx = 0
+        name_keywords = ['name', 'player', 'sub', 'first']
+        rating_keywords = ['rating', 'level', 'skill', 'score', 'pts']
+        
+        for i in range(min(15, len(raw_df))):
+            row_str = " ".join(str(x).lower() for x in raw_df.iloc[i].values)
+            # Look for row containing both a name identifier AND a rating identifier
+            if any(k in row_str for k in name_keywords) and any(k in row_str for k in rating_keywords):
+                header_idx = i
+                break
+                
+        # Set the columns to the found header row and drop the intro rows
+        raw_df.columns = raw_df.iloc[header_idx]
+        sub_df = raw_df[header_idx + 1:].reset_index(drop=True)
 
         # 2. Fuzzy Column Matching
         # Normalize columns to lowercase strings for easy searching
@@ -188,8 +205,8 @@ with param_cols[2]:
     our_game_date = st.date_input("Game Date", value=datetime.date.today())
 
 with param_cols[3]:
-    # Replaced hardcoded dropdown with a flexible time input
-    our_game_time = st.time_input("Our Game Time", value=datetime.time(20, 0)) # Defaults to 8:00 PM
+    # Replaced hardcoded dropdown with a flexible time input with 5 min increments
+    our_game_time = st.time_input("Our Game Time", value=datetime.time(20, 0), step=datetime.timedelta(minutes=5)) 
     formatted_time = our_game_time.strftime("%I:%M %p").lstrip("0") # Format to e.g. "8:00 PM"
 
 with param_cols[4]:
