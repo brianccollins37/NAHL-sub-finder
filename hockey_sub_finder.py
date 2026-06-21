@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import math
 
 # Set up the page configuration
 st.set_page_config(
@@ -12,7 +11,6 @@ st.set_page_config(
 )
 
 # Scheduling rules: Track side games start on the hour/20/40. Road side games stagger by 10 mins.
-# Offset represents minutes from 8:00 PM to calculate exact overlaps.
 TIME_SLOTS = {
     "8:00 PM (Track Side)": {"offset": 0},
     "8:10 PM (Road Side)": {"offset": 10},
@@ -26,7 +24,7 @@ TIME_SLOTS = {
 if 'urls' not in st.session_state:
     st.session_state.urls = {
         "NAHL_SUB": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "NAHL_ROSTER": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-", # Default to schedule/roster page
+        "NAHL_ROSTER": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-",
         "CVHL_SUB": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "CVHL_ROSTER": "https://www.nahlpgh-mgmt.com/page/show/example_cvhl",
         "OFHL_SUB": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
@@ -50,56 +48,64 @@ with st.sidebar:
     st.session_state.urls["OFHL_SUB"] = st.text_input("OFHL Sub Sheet CSV", value=st.session_state.urls["OFHL_SUB"])
     st.session_state.urls["OFHL_ROSTER"] = st.text_input("OFHL Webpage", value=st.session_state.urls["OFHL_ROSTER"])
 
-@st.cache_data(ttl=600) # Cache data for 10 minutes to avoid hitting rate limits
-def load_data(league: str, sub_url: str, roster_url: str) -> pd.DataFrame:
+@st.cache_data(ttl=600)
+def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool) -> pd.DataFrame:
     """
-    Attempts to load data from the provided URLs.
-    If it fails (due to permissions or network), it generates robust mock data.
+    Attempts to load live data. Falls back to mock data if it fails.
     """
     try:
-        # Attempt to read the real Google Sheet
+        # 1. Read the Sub Google Sheet
+        # The URL must end in /export?format=csv&gid=0 for Pandas to read it directly
         sub_df = pd.read_csv(sub_url)
         
-        # Attempt to read tables from the provided league webpage
-        try:
-            web_tables = pd.read_html(roster_url)
-            # Logic to extract the specific roster/schedule table from web_tables goes here
-            # pandas returns a list of all tables found on the page.
-            roster_df = web_tables[0] if web_tables else pd.DataFrame()
-        except Exception as e:
-            # Silently fail web scraping and fallback if needed
-            roster_df = pd.DataFrame()
+        # Standardize standard column names to what the app expects
+        rename_dict = {
+            'Player Name': 'Name',
+            'Player': 'Name',
+            'Position': 'Pos',
+            'Phone Number': 'Phone',
+            'Email Address': 'Email'
+        }
+        sub_df = sub_df.rename(columns=rename_dict)
         
-        # Merge logic would go here once exact column names are known.
-        # For example: df = pd.merge(sub_df, roster_df, on="Name", how="left")
+        # Ensure we have the minimum required columns, filling missing ones with blanks
+        required_cols = ['Name', 'Rating', 'Pos', 'Phone', 'Email', 'Team', 'Scheduled_Date', 'Scheduled_Time']
+        for col in required_cols:
+            if col not in sub_df.columns:
+                sub_df[col] = "Unknown" if col in ['Team', 'Phone', 'Email'] else None
+                if col == 'Scheduled_Time':
+                    sub_df[col] = "Free"
         
-        # We will assume if it succeeds, we need to standardize column names.
-        pass
+        # 2. Attempt to scrape the Roster/Schedule page if enabled
+        if check_schedules and roster_url:
+            try:
+                web_tables = pd.read_html(roster_url)
+                # In a real scenario, you'd inspect web_tables to find the exact index.
+                # For now, we will just rely on the Sub Sheet data and mock schedule defaults.
+                pass 
+            except Exception as e:
+                st.toast(f"Could not read schedule from website: {e}", icon="⚠️")
         
-    except Exception as e:
-        # FALLBACK: Generate Mock Data if the sheets/sites are inaccessible
-        st.toast(f"Could not read live data for {league}. Loading mock data.", icon="⚠️")
-        pass
+        # Drop rows where Name or Rating is missing
+        sub_df = sub_df.dropna(subset=['Name', 'Rating'])
+        
+        # Ensure Rating is a number
+        sub_df['Rating'] = pd.to_numeric(sub_df['Rating'], errors='coerce').fillna(0)
+        
+        return sub_df
 
-    # Generating realistic mock data matching the prototype
-    mock_data = [
-        {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM (Track Side)"},
-        {"Name": "David Jones", "Rating": 85, "Pos": "Defense", "Team": "Ice Hogs", "Phone": "(412) 555-0102", "Email": "djones@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-        {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM (Road Side)"},
-        {"Name": "Tom Brown", "Rating": 79, "Pos": "Defense", "Team": "Lumberjacks", "Phone": "(724) 555-0104", "Email": "tbrown_d@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:10 PM (Road Side)"},
-        {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-        {"Name": "Ryan Davis", "Rating": 84, "Pos": "Forward", "Team": "Ice Hogs", "Phone": "(412) 555-0106", "Email": "rdavis@example.com", "Scheduled_Date": datetime.date.today() + datetime.timedelta(days=1), "Scheduled_Time": "9:20 PM (Track Side)"},
-        {"Name": "Kevin White", "Rating": 80, "Pos": "Defense", "Team": "Puck Hounds", "Phone": "(412) 555-0107", "Email": "kwhite@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "10:40 PM (Track Side)"},
-        {"Name": "Brian Clark", "Rating": 75, "Pos": "Goalie", "Team": "Lumberjacks", "Phone": "(724) 555-0108", "Email": "bclark_net@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:20 PM (Track Side)"},
-        {"Name": "Matt Taylor", "Rating": 86, "Pos": "Forward", "Team": "Iron Lungs", "Phone": "(412) 555-0109", "Email": "mtaylor@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "10:50 PM (Road Side)"},
-        {"Name": "Joe Anderson", "Rating": 81, "Pos": "Forward", "Team": "Ice Hogs", "Phone": "(412) 555-0110", "Email": "janderson@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-        {"Name": "Steve Thomas", "Rating": 89, "Pos": "Defense", "Team": "Puck Hounds", "Phone": "(724) 555-0111", "Email": "sthomas@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM (Track Side)"},
-        {"Name": "Alex Moore", "Rating": 77, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0112", "Email": "amoore@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:10 PM (Road Side)"},
-        {"Name": "Eric Jackson", "Rating": 83, "Pos": "Defense", "Team": "Iron Lungs", "Phone": "(412) 555-0113", "Email": "ejackson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM (Road Side)"},
-        {"Name": "Adam Martin", "Rating": 85, "Pos": "Goalie", "Team": "Ice Hogs", "Phone": "(724) 555-0114", "Email": "amartin@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
-        {"Name": "Scott Lee", "Rating": 78, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0115", "Email": "slee@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"}
-    ]
-    return pd.DataFrame(mock_data)
+    except Exception as e:
+        # Show exactly what failed on the screen so we can debug it
+        st.error(f"Failed to load live data for {league}. Ensure the Google Sheet is set to 'Anyone with link can view'. Error details: {e}")
+        
+        # FALLBACK: Generate Mock Data
+        mock_data = [
+            {"Name": "Mike Smith", "Rating": 88, "Pos": "Forward", "Team": "Lumberjacks", "Phone": "(412) 555-0101", "Email": "mike.s@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "8:00 PM (Track Side)"},
+            {"Name": "David Jones", "Rating": 85, "Pos": "Defense", "Team": "Ice Hogs", "Phone": "(412) 555-0102", "Email": "djones@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"},
+            {"Name": "Chris Wilson", "Rating": 82, "Pos": "Forward", "Team": "Puck Hounds", "Phone": "(412) 555-0103", "Email": "cwilson@example.com", "Scheduled_Date": datetime.date.today(), "Scheduled_Time": "9:30 PM (Road Side)"},
+            {"Name": "Dan Miller", "Rating": 92, "Pos": "Goalie", "Team": "Iron Lungs", "Phone": "(724) 555-0105", "Email": "brickwall@example.com", "Scheduled_Date": None, "Scheduled_Time": "Free"}
+        ]
+        return pd.DataFrame(mock_data)
 
 def calculate_status(row, our_date, our_time, check_schedules):
     """Determines the availability status of a player based on time offsets."""
@@ -109,8 +115,9 @@ def calculate_status(row, our_date, our_time, check_schedules):
     if row['Scheduled_Time'] == "Free" or pd.isna(row['Scheduled_Date']):
         return "🟢 Free"
     
-    if row['Scheduled_Date'] != our_date:
-        return "🟢 Free (Different Day)"
+    # If the dates don't match (and neither is None), they are free today
+    if str(row['Scheduled_Date']) != str(our_date):
+        return "🟢 Free"
 
     their_time = row['Scheduled_Time']
     
@@ -133,14 +140,11 @@ def calculate_status(row, our_date, our_time, check_schedules):
 st.title("🏒 Hockey Sub Finder")
 st.markdown("Easily find eligible replacements for missing players by filtering ratings, positions, and schedules.")
 
-col1, col2, col3 = st.columns([1, 1, 2])
+col1, col2 = st.columns([1, 1])
 with col1:
     league = st.selectbox("League", ["NAHL", "CVHL", "OFHL"])
 with col2:
     season = st.selectbox("Season", ["Season 54", "Season 53", "Season 17 (OFHL)"])
-
-# Load data based on league selection and current session state URLs
-df = load_data(league, st.session_state.urls[f"{league}_SUB"], st.session_state.urls[f"{league}_ROSTER"])
 
 st.divider()
 
@@ -165,6 +169,9 @@ with param_cols[4]:
     st.markdown("<br>", unsafe_allow_html=True) # Spacer to align toggles
     is_playoff_mode = st.toggle("Playoff Mode (Stricter Rating)", value=False)
     check_schedules = st.toggle("Check Web Schedules", value=True)
+
+# Load data based on league selection and current session state URLs
+df = load_data(league, st.session_state.urls[f"{league}_SUB"], st.session_state.urls[f"{league}_ROSTER"], check_schedules)
 
 st.divider()
 
@@ -217,11 +224,6 @@ else:
             "Pos": st.column_config.TextColumn("Position", width="small"),
             "Status": st.column_config.TextColumn("Availability Status", width="large"),
             "Phone": st.column_config.TextColumn("Phone"),
-            "Email": st.column_config.TextColumn("Email") # Note: Streamlit doesn't natively support mailto: links in dataframe yet without unsafe HTML
+            "Email": st.column_config.TextColumn("Email")
         }
     )
-
-st.markdown("""
----
-**Note on Data Integration:** To connect this to your live Google Sheets, ensure your sheets are set to "Anyone with the link can view" in the sharing settings. The app is pre-configured to attempt reading from the URLs provided.
-""")
