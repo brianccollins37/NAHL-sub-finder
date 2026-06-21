@@ -107,7 +107,8 @@ def load_data(league: str, sub_url: str, roster_url: str, check_schedules: bool)
         sub_df = sub_df.dropna(subset=['Name'])
         
         # Clean up Rating (Extracts just the numbers, handles cases like "92 (A)")
-        sub_df['Rating'] = sub_df['Rating'].astype(str).apply(lambda x: re.sub(r'\D', '', x))
+        # We wrap 'x' in str() to prevent 'expected string or bytes-like object, got float' errors
+        sub_df['Rating'] = sub_df['Rating'].apply(lambda x: re.sub(r'\D', '', str(x)))
         sub_df['Rating'] = pd.to_numeric(sub_df['Rating'], errors='coerce').fillna(0)
         
         # Drop anyone who has a 0 rating (usually means the row was just notes/blank)
