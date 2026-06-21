@@ -23,6 +23,8 @@ LEAGUE_CONFIG = {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
         "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE",
+        "Sub_Eligibility_Column": "NA",
+        "Sub_Eligibility_Value": "Y",
         "Team_Names": [
             "Hells Kitchen - Shane",
             "No Regretskys - Deemer",
@@ -92,6 +94,10 @@ def clean_player_name(name):
 def clean_text(value):
     value = str(value).replace("\xa0", " ")
     return re.sub(r"\s+", " ", value).strip()
+
+
+def value_matches(value, expected_value):
+    return clean_text(value).upper() == clean_text(expected_value).upper()
 
 
 def team_signature(team_name):
@@ -172,6 +178,10 @@ def normalize_subs(df):
     ).map(clean_text)
     subs["Position"] = subs["Position"].map(clean_text)
     subs["Rating"] = pd.to_numeric(subs["Rating"], errors="coerce")
+    for optional_column in ["Email", "Phone", "NA"]:
+        if optional_column in subs.columns:
+            subs[optional_column] = subs[optional_column].map(clean_text)
+
     subs = subs.dropna(subset=["Name", "Rating", "Position"])
     subs = subs[(subs["Name"] != "") & (subs["Position"] != "")]
 
@@ -211,6 +221,22 @@ try:
 except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
+
+eligibility_column = config.get("Sub_Eligibility_Column")
+eligibility_value = config.get("Sub_Eligibility_Value")
+if eligibility_column:
+    if eligibility_column not in subs_df.columns:
+        st.error(
+            f"Could not find the required `{eligibility_column}` eligibility column "
+            f"in the {league} sub sheet."
+        )
+        st.stop()
+
+    subs_df = subs_df[
+        subs_df[eligibility_column].map(
+            lambda value: value_matches(value, eligibility_value)
+        )
+    ].copy()
 
 roster_df = pd.DataFrame()
 roster_error = None
