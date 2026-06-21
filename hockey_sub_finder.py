@@ -16,7 +16,7 @@ st.set_page_config(
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/edit?usp=sharing", 
+        "Roster_Sheet": "YOUR_NAHL_ROSTER_CSV_URL_HERE", 
         "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE"
     },
     "CVHL": {
@@ -86,6 +86,9 @@ df, error_msg = load_data(league, LEAGUE_CONFIG[league]["Sub_Sheet"], LEAGUE_CON
 
 if error_msg: st.error(f"Live read failed: {error_msg}")
 
+# Ensure 'Team' column exists even if failed to load
+if 'Team' not in df.columns: df['Team'] = "Unknown"
+
 # Roster-First Workflow
 team_list = df['Team'].dropna().unique().tolist()
 selected_team = st.selectbox("Your Team", team_list)
@@ -99,4 +102,4 @@ filtered_df = df[df['Rating'] <= player_row['Rating']]
 filtered_df = filtered_df[filtered_df['Team'] != selected_team]
 st.dataframe(filtered_df[['Name', 'Team', 'Rating', 'Pos', 'Phone', 'Email']])
 
-st.caption("Contact BC at [brian.c.collins.37@gmail.com](mailto:brian.c.collins.37@gmail.com) if your league needs an update.")
+st.caption("Contact BC at [brian.c.collins.37@gmail.com](mailto:brian.c.collins.37@gmail.com) if your league needs an update to use the system.")
