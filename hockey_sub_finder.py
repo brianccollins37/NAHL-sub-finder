@@ -3,7 +3,7 @@ import re
 
 import pandas as pd
 import requests
-import streamlit as st
+import streamlit as st 
 
 try:
     import certifi
