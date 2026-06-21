@@ -1,4 +1,5 @@
 from io import StringIO
+import re
 
 import pandas as pd
 import requests
@@ -70,12 +71,17 @@ def read_table_from_sheet(url, required_headers):
 
 
 def clean_player_name(name):
-    name = str(name).strip()
+    name = clean_text(name)
     if "," not in name:
         return name
 
     last, first = [part.strip() for part in name.split(",", 1)]
     return f"{first} {last}".strip()
+
+
+def clean_text(value):
+    value = str(value).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def normalize_roster(df):
@@ -95,8 +101,8 @@ def normalize_roster(df):
 
     roster = df[required].copy()
     roster["Name"] = roster["Name"].map(clean_player_name)
-    roster["Team"] = roster["Team"].astype(str).str.strip()
-    roster["Position"] = roster["Position"].astype(str).str.strip()
+    roster["Team"] = roster["Team"].map(clean_text)
+    roster["Position"] = roster["Position"].map(clean_text)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
     roster = roster.dropna(subset=["Name", "Team", "Rating", "Position"])
     roster = roster[(roster["Name"] != "") & (roster["Team"] != "")]
@@ -121,11 +127,11 @@ def normalize_subs(df):
 
     subs = df.copy()
     subs["Name"] = (
-        subs["First Name"].astype(str).str.strip()
+        subs["First Name"].map(clean_text)
         + " "
-        + subs["Last Name"].astype(str).str.strip()
-    ).str.strip()
-    subs["Position"] = subs["Position"].astype(str).str.strip()
+        + subs["Last Name"].map(clean_text)
+    ).map(clean_text)
+    subs["Position"] = subs["Position"].map(clean_text)
     subs["Rating"] = pd.to_numeric(subs["Rating"], errors="coerce")
     subs = subs.dropna(subset=["Name", "Rating", "Position"])
     subs = subs[(subs["Name"] != "") & (subs["Position"] != "")]
@@ -179,7 +185,7 @@ except Exception as error:
 st.subheader("1. Select Missing Player")
 
 if not roster_df.empty:
-    team_list = sorted(roster_df["Team"].dropna().unique().tolist())
+    team_list = sorted(roster_df["Team"].dropna().drop_duplicates().tolist())
     selected_team = st.selectbox("Select Team", team_list)
 
     team_roster = roster_df[roster_df["Team"] == selected_team].copy()
@@ -208,8 +214,10 @@ else:
 
 
 st.subheader("2. Eligible Subs")
+playoffs = st.checkbox("Playoffs")
+rating_cutoff = target_rating - 1 if playoffs else target_rating
 
-eligible = subs_df[subs_df["Rating"] <= target_rating].copy()
+eligible = subs_df[subs_df["Rating"] <= rating_cutoff].copy()
 
 if is_goalie(target_position):
     eligible = eligible[eligible["Position"].map(is_goalie)]
@@ -221,6 +229,6 @@ if selected_team and not roster_df.empty:
     eligible = eligible[~eligible["Name"].isin(current_team_names)]
 
 st.caption(
-    f"Showing {len(eligible)} eligible sub(s) at rating {format_rating(target_rating)} or below."
+    f"Showing {len(eligible)} eligible sub(s) at rating {format_rating(rating_cutoff)} or below."
 )
 st.dataframe(eligible, width="stretch", hide_index=True)
