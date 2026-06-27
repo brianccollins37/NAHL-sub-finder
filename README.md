@@ -1,165 +1,40 @@
-🏒 Hockey Sub Finder
+# 🏒 Hockey Sub Finder
 
-A Streamlit app for finding eligible substitute players for NAHL games using live Google Sheets data.
+A Streamlit app for finding eligible substitute players for league games using live Google Sheets data.
 
 The app lets you select a team, choose the missing player from that team's roster, and then filters the sub list by rating and position so captains can quickly find valid replacement options.
 
-Current Status
+## Current Status
 
-NAHL is currently configured and active.
+**NAHL, CVHL, and OFHL** are currently configured and active.
 
-Note: OFHL, CVHL, schedule conflict checking, and additional roster/schedule integrations are planned, but they are not active in the current version.
+Schedule conflict checking and additional web-based schedule integrations are planned, but they are not active in the current version.
 
-Features
+## Features
 
-Live Google Sheets data: Pulls the NAHL roster and sub list directly from published Google Sheets CSV URLs.
+- **Live Google Sheets data:** Pulls league rosters and sub lists directly from published Google Sheets CSV URLs.
+- **Dynamic Team and Player Selection:** Uses the roster sheets to dynamically show the configured teams and players for the selected league.
+- **Team Name Cleanup:** Normalizes roster rows that contain numbered variants such as `10 Hole Strut - Ulrich` back to the configured team name, such as `5 Hole Strut - Ulrich`.
+- **Rating Filtering:** Shows subs whose rating is equal to or lower than the missing player's rating. Includes a customizable minimum rating filter to keep lists manageable.
+- **Playoffs Mode:** When `Playoffs` is checked, eligible subs must be at least one rating point lower than the missing player.
+- **Position Filtering:** Goalie replacements only show goalies; skater replacements hide goalies. Supports the "E" (Either F/D) position for CVHL and OFHL.
+- **League-Specific Eligibility:** Automatically enforces NAHL-specific rules (requiring the `NA` column to be `Y`). CVHL and OFHL do not require this flag.
+- **Same-Team Exclusion:** Removes players from the selected missing player's team from the eligible sub list.
+- **Interactive Contact Buttons:** Displays 1-click `💬 Text` and `📧 Email` buttons inside the data table for quick mobile messaging.
+- **Direct Source Links:** Provides a quick link at the bottom of the app directly to the active Google Sheet in case a captain needs to request a goalie exception from the commissioner.
 
-Team and player selection: Uses the roster sheet to show the configured NAHL teams and the players on each team.
+## Tech Stack
 
-Team name cleanup: Normalizes roster rows that contain numbered variants (e.g., 10 Hole Strut - Ulrich back to the configured team name 5 Hole Strut - Ulrich).
+- Python
+- Streamlit
+- Pandas
+- Requests
+- Certifi
 
-Rating filtering: Shows subs whose rating is equal to or lower than the missing player's rating.
-
-Playoffs mode: When Playoffs is checked, eligible subs must be at least one rating point lower than the missing player.
-
-Position filtering: Goalie replacements only show goalies; skater replacements hide goalies.
-
-NAHL eligibility filtering: Only shows sub-list rows where the NA column is Y.
-
-Same-team exclusion: Removes players from the selected missing player's team from the eligible sub list.
-
-Contact fields: Displays available contact columns from the sub list, including email, phone, and NA eligibility.
-
-Tech Stack
-
-Python
-
-Streamlit
-
-Pandas
-
-Requests
-
-Certifi
-
-Running Locally
+## Running Locally
 
 Clone the repository:
 
-git clone https://github.com/YOUR-USERNAME/hockey-sub-finder.git
+```bash
+git clone [https://github.com/YOUR-USERNAME/hockey-sub-finder.git](https://github.com/YOUR-USERNAME/hockey-sub-finder.git)
 cd hockey-sub-finder
-
-
-Install dependencies:
-
-pip install -r requirements.txt
-
-
-Run the app:
-
-streamlit run hockey_sub_finder.py
-
-
-Deploying to Streamlit Community Cloud
-
-This app can be hosted on Streamlit Community Cloud.
-
-Make sure the repository contains the app file and requirements.txt.
-
-Go to share.streamlit.io and log in with GitHub.
-
-Click New app.
-
-Select the repository.
-
-Set the main file path to the app file: hockey_sub_finder.py.
-
-Click Deploy.
-
-Requirements
-
-The current requirements.txt should include:
-
-streamlit
-pandas
-requests
-certifi
-
-
-(Note: lxml is not required for the current version because the app reads published CSV data instead of scraping HTML tables.)
-
-Data Formatting Notes
-
-The Google Sheets used by the app must be published to the web as CSV or shared so Streamlit Community Cloud can read them.
-
-The Roster Sheet should contain a table with exactly these columns:
-
-Position
-
-Name
-
-Rating
-
-Team
-
-The Sub Sheet should contain a table with exactly these columns:
-
-Player Rating
-
-Pos (or Position)
-
-First Name
-
-Last Name
-
-NA
-
-Optional Sub Sheet columns (will be displayed if present):
-
-Email
-
-Cell Phone
-
-Note: For NAHL, NA must be Y for the player to appear as an eligible sub. The sheets may contain instruction rows above the actual player table. The app automatically searches for the real header row before loading the table.
-
-Configuring Teams
-
-NAHL team names are configured in the app under LEAGUE_CONFIG["NAHL"]["Team_Names"].
-
-Current configured teams:
-
-Hells Kitchen - Shane
-
-No Regretskys - Deemer
-
-VIP After Hours - Ruefle
-
-Disco Biscuits - Hilborn
-
-8 Ball - Stevo
-
-Goal Diggers - BC
-
-5 Hole Strut - Ulrich
-
-Funkytown - Murawski
-
-Update this list in hockey_sub_finder.py if official team names or captains change in future seasons.
-
-Not Yet Included
-
-The following items were mentioned in older documentation/code iterations but are not currently active:
-
-OFHL and CVHL support
-
-Web-based schedule conflict checking
-
-At-the-rink or adjacent-game indicators
-
-Admin settings UI
-
-Failsafe mock data
-
-License
-
-This project is licensed under the MIT License if the repository includes an MIT LICENSE file.
