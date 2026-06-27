@@ -35,6 +35,18 @@ LEAGUE_CONFIG = {
             "Funkytown - Murawski",
         ],
     },
+    "CVHL": {
+        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
+        "Schedule_Sheet": "YOUR_CVHL_SCHEDULE_CSV_URL_HERE",
+        # Notice no NA requirement for CVHL subs
+    },
+    "OFHL": {
+        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
+        "Schedule_Sheet": "YOUR_OFHL_SCHEDULE_CSV_URL_HERE",
+        # Notice no NA requirement for OFHL subs
+    }
 }
 
 def is_placeholder_url(url):
@@ -124,15 +136,21 @@ def canonicalize_team_name(team_name, canonical_team_names):
     return signature_lookup.get(team_signature(team_name), team_name)
 
 def normalize_roster(df, canonical_team_names=None):
-    column_map = {
-        "Position": "Position",
-        "Name": "Name",
-        "Rating": "Rating",
-        "Rating ": "Rating",
-        "Team": "Team",
-    }
+    # Fuzzy match columns
+    col_mapping = {}
+    for col in df.columns:
+        c_lower = str(col).lower().strip()
+        if c_lower in ['player rating', 'rating']:
+            col_mapping[col] = 'Rating'
+        elif c_lower in ['pos', 'position']:
+            col_mapping[col] = 'Position'
+        elif c_lower in ['name', 'player']:
+            col_mapping[col] = 'Name'
+        elif c_lower in ['team']:
+            col_mapping[col] = 'Team'
 
-    df = df.rename(columns={column: column_map.get(column, column) for column in df.columns})
+    df = df.rename(columns=col_mapping)
+    
     required = ["Name", "Team", "Rating", "Position"]
     missing = [column for column in required if column not in df.columns]
     if missing:
@@ -151,15 +169,26 @@ def normalize_roster(df, canonical_team_names=None):
 
 
 def normalize_subs(df):
-    df = df.rename(
-        columns={
-            "Player Rating": "Rating",
-            "Pos": "Position",
-            "First Name": "First Name",
-            "Last Name": "Last Name",
-            "Cell Phone": "Phone",
-        }
-    )
+    # Fuzzy match columns for different leagues
+    col_mapping = {}
+    for col in df.columns:
+        c_lower = str(col).lower().strip()
+        if c_lower in ['player rating', 'rating']:
+            col_mapping[col] = 'Rating'
+        elif c_lower in ['pos', 'position']:
+            col_mapping[col] = 'Position'
+        elif c_lower in ['first name']:
+            col_mapping[col] = 'First Name'
+        elif c_lower in ['last name']:
+            col_mapping[col] = 'Last Name'
+        elif c_lower in ['cell phone', 'phone', 'mobile']:
+            col_mapping[col] = 'Phone'
+        elif c_lower in ['email', 'e-mail']:
+            col_mapping[col] = 'Email'
+        elif c_lower in ['na', 'n/a']:
+            col_mapping[col] = 'NA'
+
+    df = df.rename(columns=col_mapping)
 
     required = ["Rating", "Position", "First Name", "Last Name"]
     missing = [column for column in required if column not in df.columns]
@@ -188,14 +217,13 @@ def normalize_subs(df):
 
     return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
 
-
 def load_roster(url, canonical_team_names=None):
-    df = read_table_from_sheet(url, required_headers=["Position", "Name", "Team"])
+    df = read_table_from_sheet(url, required_headers=["Name", "Team"])
     return normalize_roster(df, canonical_team_names)
 
 
 def load_subs(url):
-    df = read_table_from_sheet(url, required_headers=["Player Rating", "First Name", "Last Name"])
+    df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
     return normalize_subs(df)
 
 
@@ -217,6 +245,7 @@ except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
 
+# Rule check: Does this specific league enforce an Eligibility check?
 eligibility_column = config.get("Sub_Eligibility_Column")
 eligibility_value = config.get("Sub_Eligibility_Value")
 if eligibility_column:
@@ -277,8 +306,7 @@ else:
     )
     selected_team = None
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
-    target_position = st.selectbox("Missing Player Position", ["F", "D", "G"])
-
+    target_position = st.selectbox("Missing Player Position", ["F", "D", "G", "E"])
 
 st.subheader("2. Eligible Subs")
 
@@ -302,6 +330,7 @@ with col2:
 # Apply both maximum and minimum rating filters
 eligible = subs_df[(subs_df["Rating"] <= rating_cutoff) & (subs_df["Rating"] >= min_rating)].copy()
 
+# The E (Either) position automatically matches Skaters since it isn't a goalie.
 if is_goalie(target_position):
     eligible = eligible[eligible["Position"].map(is_goalie)]
 else:
