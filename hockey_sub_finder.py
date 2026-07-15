@@ -8,7 +8,7 @@ import streamlit as st
 
 try:
     import certifi
-except ImportError:
+except ImportError:  # pragma: no cover
     certifi = None
 
 st.set_page_config(
@@ -20,20 +20,17 @@ st.set_page_config(
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
-        "Schedule_ICS": "https://www.nahlpgh-mgmt.com/ical/league_instance/231092?subseason=963426",
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-",
         "Sub_Eligibility_Column": "NA",
         "Sub_Eligibility_Value": "Y",
     },
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
-        "Schedule_ICS": "https://www.nahlpgh-mgmt.com/ical/league_instance/231094?subseason=963426", 
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9489537-cvhl-cvhl-18-",
     },
     "OFHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
-        "Schedule_ICS": "https://www.nahlpgh-mgmt.com/ical/league_instance/231093?subseason=963426",
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9489545-ofhl-ofhl-17-",
     }
 }
 
@@ -44,6 +41,7 @@ def is_placeholder_url(url):
 def fetch_csv_text(url):
     if is_placeholder_url(url):
         raise ValueError("This sheet URL is still a placeholder.")
+
     verify = certifi.where() if certifi else True
     response = requests.get(url, timeout=20, verify=verify)
     response.raise_for_status()
@@ -61,8 +59,10 @@ def read_table_from_sheet(url, required_headers):
     csv_text = fetch_csv_text(url)
     raw_rows = pd.read_csv(StringIO(csv_text), header=None, dtype=str).fillna("")
     header_row = find_header_row(raw_rows.values.tolist(), required_headers)
+
     if header_row is None:
         raise ValueError("Could not find a table header containing: " + ", ".join(required_headers))
+
     df = pd.read_csv(StringIO(csv_text), header=header_row, dtype=str).fillna("")
     df.columns = [str(column).strip() for column in df.columns]
     df = df.loc[:, [column for column in df.columns if not column.startswith("Unnamed")]]
@@ -82,33 +82,6 @@ def clean_text(value):
 def value_matches(value, expected_value):
     return clean_text(value).upper() == clean_text(expected_value).upper()
 
-def normalize_roster(df):
-    column_map = {
-        "Position": "Position",
-        "Name": "Name",
-        "Rating": "Rating",
-        "Rating ": "Rating",
-        "Team": "Team",
-    }
-    df = df.rename(columns={column: column_map.get(column, column) for column in df.columns})
-    required = ["Name", "Team", "Rating", "Position"]
-    missing = [column for column in required if column not in df.columns]
-    if missing:
-        raise ValueError("Roster sheet is missing: " + ", ".join(missing))
-
-    roster = df[required].copy()
-    roster["Name"] = roster["Name"].map(clean_player_name)
-    roster["Team"] = roster["Team"].map(clean_text)
-    roster["Position"] = roster["Position"].map(clean_text)
-    roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
-    
-    # Create an alpha-only key to match names between the roster and sub sheet
-    roster["JoinKey"] = roster["Name"].apply(lambda x: re.sub(r'[^A-Z]', '', str(x).upper()))
-    
-    roster = roster.dropna(subset=["Name", "Team", "Rating", "Position"])
-    roster = roster[(roster["Name"] != "") & (roster["Team"] != "")]
-    return roster.sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
-
 def normalize_subs(df):
     col_mapping = {}
     for col in df.columns:
@@ -124,77 +97,134 @@ def normalize_subs(df):
     df = df.rename(columns=col_mapping)
     required = ["Rating", "Position", "First Name", "Last Name"]
     missing = [column for column in required if column not in df.columns]
-    if missing: raise ValueError("Sub sheet is missing: " + ", ".join(missing))
+    if missing:
+        raise ValueError("Sub sheet is missing: " + ", ".join(missing))
 
     subs = df.copy()
     subs["Name"] = (subs["First Name"].map(clean_text) + " " + subs["Last Name"].map(clean_text)).map(clean_text)
     
+    # Create Alpha-Only key for flawless cross-referencing
     subs["JoinKey"] = subs["Name"].apply(lambda x: re.sub(r'[^A-Z]', '', str(x).upper()))
     
     subs["Position"] = subs["Position"].map(clean_text)
     subs["Rating"] = pd.to_numeric(subs["Rating"], errors="coerce")
     for optional_column in ["Email", "Phone", "NA"]:
-        if optional_column in subs.columns: subs[optional_column] = subs[optional_column].map(clean_text)
+        if optional_column in subs.columns:
+            subs[optional_column] = subs[optional_column].map(clean_text)
 
     subs = subs.dropna(subset=["Name", "Rating", "Position"])
     subs = subs[(subs["Name"] != "") & (subs["Position"] != "")]
+
     display_columns = ["Name", "Rating", "Position"]
     for optional_column in ["Email", "Phone", "NA"]:
         if optional_column in subs.columns: display_columns.append(optional_column)
+
     return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True])
 
-@st.cache_data(ttl=600)
-def get_ics_schedule(ics_url, target_date):
-    """Parses an iCal URL to find the game schedule for a specific date."""
-    schedule_map = {}
-    if not ics_url or is_placeholder_url(ics_url):
-        return schedule_map
+@st.cache_data(ttl=3600)
+def get_web_rosters(league_page_url):
+    """Scrapes SportsEngine using pure Regex to build a master roster of all teams."""
+    if not league_page_url or is_placeholder_url(league_page_url):
+        return pd.DataFrame()
 
+    roster_list = []
+    # Spoof headers to prevent SportsEngine from blocking the request as a bot
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+    
     try:
         verify = certifi.where() if certifi else True
-        response = requests.get(ics_url, timeout=20, verify=verify)
-        response.raise_for_status()
-        
-        target_str = target_date.strftime("%Y%md") # format as 20260719
-        
-        events = response.text.split("BEGIN:VEVENT")
-        for event in events[1:]:
-            if f"DTSTART;VALUE=DATE:{target_str}" in event or f"DTSTART:{target_str}" in event:
+        with requests.Session() as session:
+            session.verify = verify
+            session.headers.update(headers)
+            
+            base_resp = session.get(league_page_url, timeout=20)
+            base_resp.raise_for_status()
+            
+            # Find the team links nested in the page
+            match_children = re.search(r'<ul class="children" id="child_nodes">(.*?)</ul>', base_resp.text, re.DOTALL)
+            if not match_children:
+                return pd.DataFrame()
                 
-                # Extract Summary (e.g. "5 HOLE Strut at Disco Biscuits")
-                match_summary = re.search(r'SUMMARY:(.*?)\n', event)
-                summary = match_summary.group(1).strip() if match_summary else ""
+            team_links = re.findall(r'<a href="(/page/show/(\d+)[^"]*\?subseason=(\d+))"[^>]*>(.*?)</a>', match_children.group(1))
+            
+            for path, team_id, subseason_id, team_name in team_links:
+                team_name_clean = team_name.replace('&amp;', '&').strip()
+                roster_url = f"https://www.nahlpgh-mgmt.com/roster/show/{team_id}?subseason={subseason_id}"
                 
-                # Extract Location (e.g. "Track")
-                match_loc = re.search(r'LOCATION:(.*?)\n', event)
-                location = match_loc.group(1).replace("\\,", ",").strip() if match_loc else "Rink"
-                
-                # Extract Time (e.g. "DTSTART:20260719T202000" -> "8:20 PM")
-                match_start = re.search(r'DTSTART:(\d{8}T\d{6})', event)
-                time_str = "Game"
-                if match_start:
-                    dt = datetime.datetime.strptime(match_start.group(1), "%Y%m%dT%H%M%S")
-                    time_str = dt.strftime("%I:%M %p").lstrip("0")
-                
-                status_str = f"{time_str} ({location})"
-                
-                # Map both teams found in the summary string
-                if " at " in summary:
-                    teams = summary.split(" at ")
-                    for t in teams:
-                        # Clean the team name aggressively for matching
-                        clean_t = re.sub(r'[^A-Z0-9]', '', t.upper().strip())
-                        schedule_map[clean_t] = status_str
-                        
+                try:
+                    r_resp = session.get(roster_url, timeout=15)
+                    # Pure Regex to hunt for "Last, First" name structures inside HTML table rows
+                    rows = re.findall(r'<tr[^>]*>(.*?)</tr>', r_resp.text, re.DOTALL)
+                    for row in rows:
+                        clean_row = re.sub(r'<[^>]+>', ' ', row) # Strip HTML tags
+                        # Match name formats like "Doe, John" or "O'Connor, Tim"
+                        match = re.search(r'([A-Za-z\-\']+(?: [A-Za-z\-\']+)?,\s*[A-Za-z\-\']+(?: [A-Za-z\-\']+)?)', clean_row)
+                        if match:
+                            name = clean_player_name(match.group(1))
+                            roster_list.append({
+                                "Name": name,
+                                "Team": team_name_clean,
+                                "Position": "F" # Position defaults to F, Subs handle specific pos matching
+                            })
+                except Exception:
+                    continue
     except Exception as e:
-        print(f"Failed to fetch ICS: {e}")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(roster_list)
+    return df.drop_duplicates() if not df.empty else df
+
+@st.cache_data(ttl=600)
+def get_web_schedule(league_page_url, target_date):
+    """Scrapes SportsEngine via Regex to find the game schedule for a specific date."""
+    schedule_map = {}
+    if not league_page_url or is_placeholder_url(league_page_url):
+        return schedule_map
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+    try:
+        verify = certifi.where() if certifi else True
+        with requests.Session() as session:
+            session.verify = verify
+            session.headers.update(headers)
+            
+            base_resp = session.get(league_page_url, timeout=20)
+            base_resp.raise_for_status()
+            
+            # Find the link to the daily schedule
+            match_sched = re.search(r'href="(?:https?://[^/]+)?(/schedule/day/league_instance/\d+\?subseason=\d+)"', base_resp.text)
+            if match_sched:
+                sched_path = match_sched.group(1).replace('&amp;', '&')
+                parts = sched_path.split('?')
+                full_url = f"https://www.nahlpgh-mgmt.com{parts[0]}/{target_date.year}/{target_date.month}/{target_date.day}?{parts[1]}"
+                
+                sched_resp = session.get(full_url, timeout=20)
+                # Regex out the game rows
+                rows = re.findall(r'<tr id="game_list_row_[^>]*>(.*?)</tr>', sched_resp.text, re.DOTALL)
+                for row in rows:
+                    teams = re.findall(r'<a class="teamName"[^>]*>([^<]+)</a>', row)
+                    if len(teams) >= 2:
+                        visitor, home = teams[0].strip().upper(), teams[1].strip().upper()
+                        
+                        loc_match = re.search(r'<div class="scheduleListTeam">\s*([^<a]+?)\s*</div>', row)
+                        location = loc_match.group(1).strip() if loc_match else "Rink"
+                        
+                        time_match = re.search(r'<span>([^<]+)</span>', row)
+                        time_str = time_match.group(1).replace(' EDT', '').replace(' EST', '').strip() if time_match else "Game"
+                        
+                        status_str = f"{time_str} ({location})"
+                        schedule_map[visitor] = status_str
+                        schedule_map[home] = status_str
+    except Exception:
         pass
         
     return schedule_map
-
-def load_roster(url):
-    df = read_table_from_sheet(url, required_headers=["Position", "Name", "Team"])
-    return normalize_roster(df)
 
 def load_subs(url):
     df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
@@ -207,7 +237,6 @@ def is_goalie(position):
 def format_rating(value):
     return f"{float(value):g}"
 
-
 st.title("Hockey Sub Finder")
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
 config = LEAGUE_CONFIG[league]
@@ -218,20 +247,36 @@ except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
 
+# Eligibility filtering
 eligibility_column = config.get("Sub_Eligibility_Column")
 eligibility_value = config.get("Sub_Eligibility_Value")
 if eligibility_column:
     if eligibility_column not in subs_df.columns:
-        st.error(f"Could not find the required `{eligibility_column}` eligibility column in the {league} sub sheet.")
+        st.error(f"Could not find required `{eligibility_column}` column in {league} sub sheet.")
         st.stop()
     subs_df = subs_df[subs_df[eligibility_column].map(lambda value: value_matches(value, eligibility_value))].copy()
 
-roster_df = pd.DataFrame()
+# Load Web Rosters
 roster_error = None
-try:
-    roster_df = load_roster(config["Roster_Sheet"])
-except Exception as error:
-    roster_error = error
+with st.spinner(f"Syncing live rosters from the {league} website..."):
+    raw_roster_df = get_web_rosters(config.get("League_Page"))
+
+if not raw_roster_df.empty:
+    roster_df = raw_roster_df.copy()
+    roster_df['JoinKey'] = roster_df['Name'].apply(lambda x: re.sub(r'[^A-Z]', '', str(x).upper()))
+    
+    # Merge ratings from Sub Sheet
+    rating_map = dict(zip(subs_df['JoinKey'], subs_df['Rating']))
+    pos_map = dict(zip(subs_df['JoinKey'], subs_df['Position']))
+    
+    roster_df['Rating'] = roster_df['JoinKey'].map(rating_map).fillna(100.0)
+    # Update positions to what they are classified as in the Sub Sheet (F/D/G/E)
+    roster_df['Position'] = roster_df['JoinKey'].map(pos_map).fillna(roster_df['Position'])
+    
+    roster_df = roster_df.sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
+else:
+    roster_df = pd.DataFrame()
+    roster_error = "Could not reach the SportsEngine League Page."
 
 st.subheader("1. Select Missing Player")
 
@@ -253,7 +298,7 @@ if not roster_df.empty:
 
     st.info(f"Targeting: {player_row['Name']} (Rating: {format_rating(target_rating)} | Pos: {target_position})")
 else:
-    st.warning(f"Roster could not be loaded for {league}: {roster_error}. Enter the missing player's rating and position manually.")
+    st.warning(f"Roster could not be loaded for {league}: {roster_error} Enter the missing player's rating and position manually.")
     selected_team = None
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
     target_position = st.selectbox("Missing Player Position", ["F", "D", "G", "E"])
@@ -265,7 +310,7 @@ with col_date:
     target_date = st.date_input("Game Date (For Schedule Check)", datetime.date.today())
 with col_sched:
     st.markdown("<br>", unsafe_allow_html=True)
-    check_schedule = st.checkbox("Check Live Web Schedules", value=True, help="Scrapes the league calendar to see if subs are already at the rink.")
+    check_schedule = st.checkbox("Check Live Web Schedules", value=True, help="Scrapes the league website to see if subs are already at the rink.")
 st.markdown("---")
 
 col1, col2 = st.columns(2)
@@ -289,28 +334,20 @@ if selected_team and not roster_df.empty:
 
 display_cols = ["Name", "Rating", "Position"]
 
-# Check Live Schedule using ICS
 if check_schedule:
     with st.spinner("Checking live web schedules..."):
-        schedule_map = get_ics_schedule(config.get("Schedule_ICS"), target_date)
+        schedule_map = get_web_schedule(config.get("League_Page"), target_date)
         
     if not roster_df.empty:
-        # Create a dictionary mapping the player's JoinKey to an ultra-clean version of their team name
-        player_to_team = dict(zip(roster_df['JoinKey'], roster_df['Team'].apply(lambda x: re.sub(r'[^A-Z0-9]', '', str(x).upper().strip()))))
+        player_to_team = dict(zip(roster_df['JoinKey'], roster_df['Team']))
     else:
         player_to_team = {}
         
     def get_status(join_key):
-        clean_team = player_to_team.get(join_key)
-        if not clean_team:
-            return "Free"
-        
-        # Check if the clean team name exists in the schedule map (we check for substrings to be safe)
-        for sched_team, game_time in schedule_map.items():
-            if sched_team in clean_team or clean_team in sched_team:
-                # Find the original display name from the roster for a nice output
-                orig_team = roster_df.loc[roster_df['JoinKey'] == join_key, 'Team'].iloc[0]
-                return f"At Rink: {game_time} ({orig_team})"
+        team = player_to_team.get(join_key)
+        if not team: return "Free"
+        game = schedule_map.get(team.upper())
+        if game: return f"At Rink: {game} ({team.title()})"
         return "Free"
         
     eligible["Schedule Status"] = eligible["JoinKey"].map(get_status)
