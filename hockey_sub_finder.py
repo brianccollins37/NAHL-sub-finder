@@ -22,7 +22,7 @@ LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
-        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
         "Sub_Eligibility_Column": "NA",
         "Sub_Eligibility_Value": "Y",
         "Team_Names": [
@@ -218,69 +218,82 @@ def normalize_subs(df):
 
     return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
 
+
 @st.cache_data(ttl=600)
-def get_daily_schedule(league_page_url, target_date, canonical_team_names):
-    """Scrapes the SportsEngine schedule to find games on the target date."""
+def get_web_data(league_page_url, target_date):
+    """Scrapes SportsEngine for today's schedule AND all team rosters."""
+    schedule_map = {}
+    player_to_team = {}
+    
     if not league_page_url or is_placeholder_url(league_page_url):
-        return {}
+        return schedule_map, player_to_team
 
     try:
         verify = certifi.where() if certifi else True
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         
-        # 1. Fetch base page to find the underlying schedule URL for the season
-        base_resp = requests.get(league_page_url, timeout=20, verify=verify, headers=headers)
-        base_resp.raise_for_status()
-        
-        match = re.search(r'href="(?:https?://[^/]+)?(/schedule/day/league_instance/\d+\?subseason=\d+)"', base_resp.text)
-        if not match:
-            return {}
+        with requests.Session() as session:
+            session.verify = verify
+            session.headers.update(headers)
             
-        sched_path = match.group(1).replace('&amp;', '&')
-        parts = sched_path.split('?')
-        
-        # 2. Inject the specific Game Date into the schedule URL
-        date_path = f"{parts[0]}/{target_date.year}/{target_date.month}/{target_date.day}?{parts[1]}"
-        full_url = "https://www.nahlpgh-mgmt.com" + date_path
-        
-        # 3. Fetch the daily schedule HTML
-        sched_resp = requests.get(full_url, timeout=20, verify=verify, headers=headers)
-        sched_resp.raise_for_status()
-        
-        # 4. Use Pandas to parse the HTML table
-        dfs = pd.read_html(StringIO(sched_resp.text))
-        sched_df = None
-        for df in dfs:
-            if 'Visitor' in df.columns and 'Home' in df.columns and 'Location' in df.columns:
-                sched_df = df
-                break
+            # 1. Fetch base page
+            base_resp = session.get(league_page_url, timeout=20)
+            base_resp.raise_for_status()
+            
+            # 2. Extract Teams & Fetch Rosters
+            match_children = re.search(r'<ul class="children" id="child_nodes">(.*?)</ul>', base_resp.text, re.DOTALL)
+            if match_children:
+                team_links = re.findall(r'<a href="(/page/show/(\d+)[^"]*\?subseason=(\d+))"[^>]*>(.*?)</a>', match_children.group(1))
+                for path, team_id, subseason_id, team_name in team_links:
+                    team_name_clean = team_name.replace('&amp;', '&').strip().upper()
+                    roster_url = f"https://www.nahlpgh-mgmt.com/roster/show/{team_id}?subseason={subseason_id}"
+                    try:
+                        r_resp = session.get(roster_url, timeout=10)
+                        dfs = pd.read_html(StringIO(r_resp.text))
+                        for df in dfs:
+                            cols = [str(c).lower() for c in df.columns]
+                            if 'player' in cols or 'name' in cols:
+                                name_col = df.columns[cols.index('player')] if 'player' in cols else df.columns[cols.index('name')]
+                                for _, row in df.iterrows():
+                                    p_name = str(row[name_col]).strip()
+                                    if p_name and p_name.lower() != 'nan':
+                                        # Use alpha-only key for robust matching (e.g., "Adam Galis" -> "ADAMGALIS")
+                                        p_key = re.sub(r'[^A-Z]', '', clean_player_name(p_name).upper())
+                                        player_to_team[p_key] = team_name_clean
+                                break
+                    except Exception:
+                        continue
+            
+            # 3. Fetch Today's Schedule
+            match_sched = re.search(r'href="(?:https?://[^/]+)?(/schedule/day/league_instance/\d+\?subseason=\d+)"', base_resp.text)
+            if match_sched:
+                sched_path = match_sched.group(1).replace('&amp;', '&')
+                parts = sched_path.split('?')
+                full_url = f"https://www.nahlpgh-mgmt.com{parts[0]}/{target_date.year}/{target_date.month}/{target_date.day}?{parts[1]}"
                 
-        if sched_df is None:
-            return {}
-            
-        # 5. Extract games and map to canonical team names
-        schedule_map = {}
-        for _, row in sched_df.iterrows():
-            visitor = str(row.get('Visitor', '')).strip()
-            home = str(row.get('Home', '')).strip()
-            location = str(row.get('Location', '')).strip()
-            status = str(row.get('Status', '')).replace(' EDT', '').replace(' EST', '').strip()
-            
-            if status == 'nan': status = 'Game'
-            if location == 'nan': location = 'Unknown Rink'
-            
-            time_loc = f"{status} ({location})"
-            
-            v_canon = canonicalize_team_name(visitor, canonical_team_names)
-            h_canon = canonicalize_team_name(home, canonical_team_names)
-            
-            schedule_map[v_canon] = time_loc
-            schedule_map[h_canon] = time_loc
-            
-        return schedule_map
+                sched_resp = session.get(full_url, timeout=20)
+                dfs = pd.read_html(StringIO(sched_resp.text))
+                sched_df = next((df for df in dfs if 'Visitor' in df.columns and 'Home' in df.columns and 'Location' in df.columns), None)
+                
+                if sched_df is not None:
+                    for _, row in sched_df.iterrows():
+                        visitor = str(row.get('Visitor', '')).replace('&amp;', '&').strip().upper()
+                        home = str(row.get('Home', '')).replace('&amp;', '&').strip().upper()
+                        location = str(row.get('Location', '')).strip()
+                        status = str(row.get('Status', '')).replace(' EDT', '').replace(' EST', '').strip()
+                        
+                        if status == 'nan': status = 'Game'
+                        if location == 'nan': location = 'Unknown Rink'
+                        
+                        time_loc = f"{status} ({location})"
+                        
+                        schedule_map[visitor] = time_loc
+                        schedule_map[home] = time_loc
+                        
+        return schedule_map, player_to_team
     except Exception as e:
         # Silently fail if web scraping breaks to prevent app crashes
-        return {}
+        return {}, {}
 
 
 def load_roster(url, canonical_team_names=None):
@@ -418,22 +431,22 @@ if selected_team and not roster_df.empty:
 display_cols = ["Name", "Rating", "Position"]
 
 # Check Live Schedule
-if check_schedule and not roster_df.empty:
-    with st.spinner("Checking live web schedule..."):
-        schedule_map = get_daily_schedule(config.get("League_Page"), target_date, config.get("Team_Names"))
+if check_schedule:
+    with st.spinner("Scraping live web schedules and rosters..."):
+        schedule_map, player_to_team = get_web_data(config.get("League_Page"), target_date)
         
-    # Create quick lookup map for Player -> Team
-    player_to_team = dict(zip(roster_df['Name'].str.upper(), roster_df['Team']))
-    
     def get_status(player_name):
-        team = player_to_team.get(str(player_name).upper())
+        # Convert Sub Name to alpha-only key for perfect matching
+        p_key = re.sub(r'[^A-Z]', '', str(player_name).upper())
+        team = player_to_team.get(p_key)
+        
         if not team:
             return "Free"
         
         game = schedule_map.get(team)
         if game:
-            short_team = team.split(' - ')[0] # E.g., 'Hells Kitchen' instead of 'Hells Kitchen - Shane'
-            return f"At Rink: {game} ({short_team})"
+            # E.g., At Rink: 8:10 PM (Track) (Disco Biscuits)
+            return f"At Rink: {game} ({team.title()})"
         return "Free"
         
     eligible["Schedule Status"] = eligible["Name"].map(get_status)
