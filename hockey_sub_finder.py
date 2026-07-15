@@ -119,6 +119,10 @@ def normalize_subs(df):
 
     return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True])
 
+# The restored load_subs function!
+def load_subs(url):
+    df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
+    return normalize_subs(df)
 
 @st.cache_data(ttl=3600)
 def get_web_rosters(league_page_url):
@@ -323,7 +327,6 @@ if not roster_df.empty:
 
     st.info(f"Targeting: {player_row['Name']} (Rating: {format_rating(target_rating)} | Pos: {target_position})")
 else:
-    # Explicitly show the trace error so we know why the scraper failed
     st.warning(f"Roster could not be loaded for {league}. Trace Error: {roster_error}. Enter the missing player's rating and position manually.")
     selected_team = None
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
