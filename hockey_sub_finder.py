@@ -1,299 +1,340 @@
-import React, { useState, useMemo } from 'react';
-import { Phone, Mail, User, Calendar, ShieldAlert, CheckCircle2, AlertCircle, ShieldOff } from 'lucide-react';
+import datetime
+from io import StringIO
+import re
 
-// Scheduling rules: Track side games start on the hour/20/40. Road side games stagger by 10 mins.
-const TIME_SLOTS = [
-  { label: "8:00 PM (Track Side)", offset: 0 },
-  { label: "8:10 PM (Road Side)", offset: 10 },
-  { label: "9:20 PM (Track Side)", offset: 80 },
-  { label: "9:30 PM (Road Side)", offset: 90 },
-  { label: "10:40 PM (Track Side)", offset: 160 },
-  { label: "10:50 PM (Road Side)", offset: 170 }
-];
+import pandas as pd
+import requests
+import streamlit as st
 
-// Mock Data representing the Google Sheet
-const MOCK_PLAYERS = [
-  { id: 1, name: "Mike Smith", rating: 88, position: "Forward", team: "Lumberjacks", scheduleDate: "2026-06-25", scheduleTime: "8:00 PM (Track Side)", phone: "(412) 555-0101", email: "mike.s@example.com" },
-  { id: 2, name: "David Jones", rating: 85, position: "Defense", team: "Ice Hogs", scheduleDate: "", scheduleTime: "Free", phone: "(412) 555-0102", email: "djones@example.com" },
-  { id: 3, name: "Chris Wilson", rating: 82, position: "Forward", team: "Puck Hounds", scheduleDate: "2026-06-25", scheduleTime: "9:30 PM (Road Side)", phone: "(412) 555-0103", email: "cwilson@example.com" },
-  { id: 4, name: "Tom Brown", rating: 79, position: "Defense", team: "Lumberjacks", scheduleDate: "2026-06-25", scheduleTime: "8:10 PM (Road Side)", phone: "(724) 555-0104", email: "tbrown_d@example.com" },
-  { id: 5, name: "Dan Miller", rating: 92, position: "Goalie", team: "Iron Lungs", scheduleDate: "", scheduleTime: "Free", phone: "(724) 555-0105", email: "brickwall@example.com" },
-  { id: 6, name: "Ryan Davis", rating: 84, position: "Forward", team: "Ice Hogs", scheduleDate: "2026-06-26", scheduleTime: "9:20 PM (Track Side)", phone: "(412) 555-0106", email: "rdavis@example.com" },
-  { id: 7, name: "Kevin White", rating: 80, position: "Defense", team: "Puck Hounds", scheduleDate: "2026-06-25", scheduleTime: "10:40 PM (Track Side)", phone: "(412) 555-0107", email: "kwhite@example.com" },
-  { id: 8, name: "Brian Clark", rating: 75, position: "Goalie", team: "Lumberjacks", scheduleDate: "2026-06-25", scheduleTime: "9:20 PM (Track Side)", phone: "(724) 555-0108", email: "bclark_net@example.com" },
-  { id: 9, name: "Matt Taylor", rating: 86, position: "Forward", team: "Iron Lungs", scheduleDate: "2026-06-25", scheduleTime: "10:50 PM (Road Side)", phone: "(412) 555-0109", email: "mtaylor@example.com" },
-  { id: 10, name: "Joe Anderson", rating: 81, position: "Forward", team: "Ice Hogs", scheduleDate: "", scheduleTime: "Free", phone: "(412) 555-0110", email: "janderson@example.com" },
-  { id: 11, name: "Steve Thomas", rating: 89, position: "Defense", team: "Puck Hounds", scheduleDate: "2026-06-25", scheduleTime: "8:00 PM (Track Side)", phone: "(724) 555-0111", email: "sthomas@example.com" },
-  { id: 12, name: "Alex Moore", rating: 77, position: "Forward", team: "Lumberjacks", scheduleDate: "2026-06-25", scheduleTime: "8:10 PM (Road Side)", phone: "(412) 555-0112", email: "amoore@example.com" },
-  { id: 13, name: "Eric Jackson", rating: 83, position: "Defense", team: "Iron Lungs", scheduleDate: "2026-06-25", scheduleTime: "9:30 PM (Road Side)", phone: "(412) 555-0113", email: "ejackson@example.com" },
-  { id: 14, name: "Adam Martin", rating: 85, position: "Goalie", team: "Ice Hogs", scheduleDate: "", scheduleTime: "Free", phone: "(724) 555-0114", email: "amartin@example.com" },
-  { id: 15, name: "Scott Lee", rating: 78, position: "Forward", team: "Puck Hounds", scheduleDate: "", scheduleTime: "Free", phone: "(412) 555-0115", email: "slee@example.com" }
-];
+try:
+    import certifi
+except ImportError:  # pragma: no cover - only used on machines missing certifi
+    certifi = None
 
-export default function App() {
-  const [league, setLeague] = useState("NAHL");
-  const [season, setSeason] = useState("Season 54");
-  const [missingRating, setMissingRating] = useState(85);
-  const [missingPosition, setMissingPosition] = useState("Skater");
-  const [ourGameDate, setOurGameDate] = useState("2026-06-25");
-  const [ourGameTime, setOurGameTime] = useState("9:20 PM (Track Side)");
-  const [isPlayoffMode, setIsPlayoffMode] = useState(false);
-  const [checkAvailability, setCheckAvailability] = useState(true);
+st.set_page_config(
+    page_title="Hockey Sub Finder",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-  // Filter and process the roster
-  const filteredRoster = useMemo(() => {
-    return MOCK_PLAYERS.filter((player) => {
-      // 1. Rating Logic
-      const isEligibleRating = isPlayoffMode ? player.rating < missingRating : player.rating <= missingRating;
-      if (!isEligibleRating) return false;
-
-      // 2. Position Logic
-      if (missingPosition === "Goalie") {
-        if (player.position !== "Goalie") return false;
-      } else {
-        if (player.position === "Goalie") return false;
-      }
-
-      return true;
-    }).map((player) => {
-      // 3. Schedule Logic (Determine Status based on Time Offset)
-      let status = "Free";
-      let statusColor = "bg-green-100 text-green-800 border-green-200";
-      let statusIcon = <CheckCircle2 className="w-4 h-4 mr-1 inline" />;
-
-      if (!checkAvailability) {
-        status = "Schedule Check Disabled";
-        statusColor = "bg-slate-100 text-slate-600 border-slate-200";
-        statusIcon = <ShieldOff className="w-4 h-4 mr-1 inline" />;
-      } else if (player.scheduleTime !== "Free" && player.scheduleDate === ourGameDate) {
-        const ourSlot = TIME_SLOTS.find(t => t.label === ourGameTime);
-        const theirSlot = TIME_SLOTS.find(t => t.label === player.scheduleTime);
-
-        if (ourSlot && theirSlot) {
-          const diffMinutes = Math.abs(ourSlot.offset - theirSlot.offset);
-          
-          if (diffMinutes === 0) {
-            status = "Unavailable (Conflict)";
-            statusColor = "bg-red-100 text-red-800 border-red-200";
-            statusIcon = <ShieldAlert className="w-4 h-4 mr-1 inline" />;
-          } else if (diffMinutes <= 100) {
-             // Game is adjacent (e.g. 8:00 and 9:20 or 8:10 and 9:30)
-            status = `At Rink: ${player.scheduleTime}`;
-            statusColor = "bg-amber-100 text-amber-800 border-amber-200";
-            statusIcon = <AlertCircle className="w-4 h-4 mr-1 inline" />;
-          } else {
-             // Game is far apart (e.g. 8:00 and 10:40)
-            status = `Playing at ${player.scheduleTime}`;
-            statusColor = "bg-blue-100 text-blue-800 border-blue-200";
-            statusIcon = <Calendar className="w-4 h-4 mr-1 inline" />;
-          }
-        }
-      }
-
-      return { ...player, status, statusColor, statusIcon };
-    }).sort((a, b) => {
-      // Sort Free/Disabled players to the top, then adjacent, then conflicts
-      const priorityA = (a.status === "Free" || a.status === "Schedule Check Disabled") ? 1 : (a.status.includes("At Rink") ? 2 : 3);
-      const priorityB = (b.status === "Free" || b.status === "Schedule Check Disabled") ? 1 : (b.status.includes("At Rink") ? 2 : 3);
-      return priorityA - priorityB;
-    });
-  }, [missingRating, missingPosition, ourGameDate, ourGameTime, isPlayoffMode, checkAvailability]);
-
-  return (
-    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
-      <div className="max-w-6xl mx-auto space-y-6">
-        
-        {/* Header */}
-        <div className="bg-slate-900 rounded-xl p-6 text-white shadow-lg flex flex-col md:flex-row justify-between items-start md:items-center">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Hockey Sub Finder</h1>
-            <p className="text-slate-400 mt-1">Select a missing player to find eligible replacements.</p>
-          </div>
-          <div className="mt-4 md:mt-0 flex space-x-2">
-            <select 
-              value={league}
-              onChange={(e) => setLeague(e.target.value)}
-              className="bg-slate-800 border border-slate-700 text-white rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="NAHL">NAHL (40+)</option>
-              <option value="CVHL">CVHL (30+)</option>
-              <option value="OFHL">OFHL (50+)</option>
-            </select>
-            <select 
-              value={season}
-              onChange={(e) => setSeason(e.target.value)}
-              className="bg-slate-800 border border-slate-700 text-white rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="Season 54">Season 54 (NAHL)</option>
-              <option value="Season 53">Season 53 (NAHL)</option>
-              <option value="Season 17">Season 17 (OFHL)</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Configuration Panel */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-            
-            {/* Missing Player Config */}
-            <div className="space-y-4 col-span-1 md:col-span-2">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">Missing Rating</label>
-                <div className="flex items-center space-x-2">
-                  <input 
-                    type="range" 
-                    min="40" 
-                    max="110" 
-                    value={missingRating}
-                    onChange={(e) => setMissingRating(parseInt(e.target.value))}
-                    className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                  />
-                  <span className="font-mono bg-slate-100 px-2 py-1 rounded text-slate-700 font-bold border border-slate-200">{missingRating}</span>
-                </div>
-              </div>
-
-              <div>
-                 <label className="block text-sm font-semibold text-slate-700 mb-1">Missing Position</label>
-                 <select 
-                    value={missingPosition}
-                    onChange={(e) => setMissingPosition(e.target.value)}
-                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="Skater">Skater (F/D/E)</option>
-                    <option value="Goalie">Goalie</option>
-                  </select>
-              </div>
-            </div>
-
-            {/* Game Context Config */}
-            <div className="space-y-4 col-span-1 md:col-span-2 border-t md:border-t-0 md:border-l border-slate-200 pt-4 md:pt-0 md:pl-6">
-               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-1">Our Game Date</label>
-                <input 
-                  type="date" 
-                  value={ourGameDate}
-                  onChange={(e) => setOurGameDate(e.target.value)}
-                  className="w-full bg-white border border-slate-300 text-slate-900 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                 <label className="block text-sm font-semibold text-slate-700 mb-1">Our Game Time</label>
-                 <select 
-                    value={ourGameTime}
-                    onChange={(e) => setOurGameTime(e.target.value)}
-                    className="w-full bg-white border border-slate-300 text-slate-900 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    {TIME_SLOTS.map(slot => (
-                      <option key={slot.label} value={slot.label}>{slot.label}</option>
-                    ))}
-                  </select>
-              </div>
-            </div>
-
-            {/* Toggles */}
-            <div className="flex flex-col pt-2 justify-center space-y-4 col-span-1 border-t md:border-t-0 md:border-l border-slate-200 pt-4 md:pt-0 md:pl-6">
-              <label className="flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={isPlayoffMode}
-                  onChange={(e) => setIsPlayoffMode(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                <span className="ml-3 text-sm font-medium text-slate-700">Playoff Mode</span>
-              </label>
-
-              <label className="flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={checkAvailability}
-                  onChange={(e) => setCheckAvailability(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                <span className="ml-3 text-sm font-medium text-slate-700">Check Schedules</span>
-              </label>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Results Table */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-             <h2 className="text-lg font-semibold text-slate-800">Eligible Subs ({filteredRoster.length})</h2>
-          </div>
-          
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
-                <tr>
-                  <th className="px-6 py-3">Player Name</th>
-                  <th className="px-6 py-3">Team</th>
-                  <th className="px-6 py-3">Rating</th>
-                  <th className="px-6 py-3">Position</th>
-                  <th className="px-6 py-3">Schedule Status</th>
-                  <th className="px-6 py-3">Contact</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredRoster.length > 0 ? (
-                  filteredRoster.map((player) => (
-                    <tr 
-                      key={player.id} 
-                      className={`hover:bg-slate-50 transition-colors ${player.status === "Unavailable (Conflict)" ? "opacity-50" : ""}`}
-                    >
-                      <td className="px-6 py-4 font-medium text-slate-900 flex items-center">
-                        <User className="w-4 h-4 text-slate-400 mr-2" />
-                        {player.name}
-                      </td>
-                      <td className="px-6 py-4 text-slate-600 font-medium">{player.team}</td>
-                      <td className="px-6 py-4">
-                        <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded font-mono text-xs border border-slate-200">
-                          {player.rating}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-slate-600">{player.position}</td>
-                      <td className="px-6 py-4">
-                         <span className={`px-2.5 py-1 rounded-full text-xs font-medium border flex items-center w-max ${player.statusColor}`}>
-                            {player.statusIcon}
-                            {player.statusText || player.status}
-                         </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex space-x-2">
-                           <a 
-                             href={`sms:${player.phone.replace(/[^0-9]/g, '')}`}
-                             className="text-slate-500 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 p-1.5 rounded transition-colors"
-                             title="Send Text"
-                           >
-                             <Phone className="w-4 h-4" />
-                           </a>
-                           <a 
-                             href={`mailto:${player.email}`}
-                             className="text-slate-500 hover:text-blue-600 bg-slate-100 hover:bg-blue-50 p-1.5 rounded transition-colors"
-                             title="Send Email"
-                           >
-                             <Mail className="w-4 h-4" />
-                           </a>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan="6" className="px-6 py-8 text-center text-slate-500">
-                      No eligible subs found for this rating and position.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
+LEAGUE_CONFIG = {
+    "NAHL": {
+        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
+        "Sub_Eligibility_Column": "NA",
+        "Sub_Eligibility_Value": "Y",
+        "Team_Names": [
+            "Hells Kitchen - Shane",
+            "No Regretskys - Deemer",
+            "VIP After Hours - Ruefle",
+            "Disco Biscuits - Hilborn",
+            "8 Ball - Stevo",
+            "Goal Diggers - BC",
+            "5 Hole Strut - Ulrich",
+            "Funkytown - Murawski",
+        ],
+    },
+    "CVHL": {
+        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
+    },
+    "OFHL": {
+        "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
+    }
 }
+
+
+def is_placeholder_url(url):
+    return not url or "YOUR_" in url
+
+
+@st.cache_data(ttl=300)
+def fetch_csv_text(url):
+    if is_placeholder_url(url):
+        raise ValueError("This sheet URL is still a placeholder.")
+
+    verify = certifi.where() if certifi else True
+    response = requests.get(url, timeout=20, verify=verify)
+    response.raise_for_status()
+    return response.text
+
+
+def find_header_row(rows, required_headers):
+    required = {header.lower() for header in required_headers}
+
+    for index, row in enumerate(rows):
+        normalized = {str(cell).strip().lower() for cell in row if str(cell).strip()}
+        if required.issubset(normalized):
+            return index
+
+    return None
+
+
+def read_table_from_sheet(url, required_headers):
+    csv_text = fetch_csv_text(url)
+    raw_rows = pd.read_csv(StringIO(csv_text), header=None, dtype=str).fillna("")
+    header_row = find_header_row(raw_rows.values.tolist(), required_headers)
+
+    if header_row is None:
+        raise ValueError(
+            "Could not find a table header containing: "
+            + ", ".join(required_headers)
+        )
+
+    df = pd.read_csv(StringIO(csv_text), header=header_row, dtype=str).fillna("")
+    df.columns = [str(column).strip() for column in df.columns]
+    df = df.loc[:, [column for column in df.columns if not column.startswith("Unnamed")]]
+    return df
+
+
+def clean_player_name(name):
+    name = clean_text(name)
+    if "," not in name:
+        return name
+
+    last, first = [part.strip() for part in name.split(",", 1)]
+    return f"{first} {last}".strip()
+
+
+def clean_text(value):
+    value = str(value).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def value_matches(value, expected_value):
+    return clean_text(value).upper() == clean_text(expected_value).upper()
+
+
+def team_signature(team_name):
+    team_name = clean_text(team_name)
+    parts = [part.strip() for part in team_name.split(" - ", 1)]
+    team_part = re.sub(r"^\d+\s+", "", parts[0]).strip()
+
+    if len(parts) == 1:
+        return team_part.lower()
+
+    return f"{team_part} - {parts[1]}".lower()
+
+
+def canonicalize_team_name(team_name, canonical_team_names):
+    team_name = clean_text(team_name)
+    if not canonical_team_names:
+        return team_name
+
+    canonical_lookup = {clean_text(name): clean_text(name) for name in canonical_team_names}
+    if team_name in canonical_lookup:
+        return canonical_lookup[team_name]
+
+    signature_lookup = {
+        team_signature(name): clean_text(name)
+        for name in canonical_team_names
+    }
+    return signature_lookup.get(team_signature(team_name), team_name)
+
+
+def normalize_roster(df, canonical_team_names=None):
+    column_map = {
+        "Position": "Position",
+        "Name": "Name",
+        "Rating": "Rating",
+        "Rating ": "Rating",
+        "Team": "Team",
+    }
+
+    df = df.rename(columns={column: column_map.get(column, column) for column in df.columns})
+    required = ["Name", "Team", "Rating", "Position"]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError("Roster sheet is missing: " + ", ".join(missing))
+
+    roster = df[required].copy()
+    roster["Name"] = roster["Name"].map(clean_player_name)
+    roster["Team"] = roster["Team"].map(
+        lambda team_name: canonicalize_team_name(team_name, canonical_team_names)
+    )
+    roster["Position"] = roster["Position"].map(clean_text)
+    roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
+    roster = roster.dropna(subset=["Name", "Team", "Rating", "Position"])
+    roster = roster[(roster["Name"] != "") & (roster["Team"] != "")]
+    return roster.sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
+
+
+def normalize_subs(df):
+    col_mapping = {}
+    for col in df.columns:
+        c_lower = str(col).lower().strip()
+        if c_lower in ['player rating', 'rating']: col_mapping[col] = 'Rating'
+        elif c_lower in ['pos', 'position']: col_mapping[col] = 'Position'
+        elif c_lower in ['first name']: col_mapping[col] = 'First Name'
+        elif c_lower in ['last name']: col_mapping[col] = 'Last Name'
+        elif c_lower in ['cell phone', 'phone', 'mobile']: col_mapping[col] = 'Phone'
+        elif c_lower in ['email', 'e-mail']: col_mapping[col] = 'Email'
+        elif c_lower in ['na', 'n/a']: col_mapping[col] = 'NA'
+
+    df = df.rename(columns=col_mapping)
+    required = ["Rating", "Position", "First Name", "Last Name"]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError("Sub sheet is missing: " + ", ".join(missing))
+
+    subs = df.copy()
+    subs["Name"] = (subs["First Name"].map(clean_text) + " " + subs["Last Name"].map(clean_text)).map(clean_text)
+    subs["Position"] = subs["Position"].map(clean_text)
+    subs["Rating"] = pd.to_numeric(subs["Rating"], errors="coerce")
+    
+    for optional_column in ["Email", "Phone", "NA"]:
+        if optional_column in subs.columns:
+            subs[optional_column] = subs[optional_column].map(clean_text)
+
+    subs = subs.dropna(subset=["Name", "Rating", "Position"])
+    subs = subs[(subs["Name"] != "") & (subs["Position"] != "")]
+
+    display_columns = ["Name", "Rating", "Position"]
+    for optional_column in ["Email", "Phone", "NA"]:
+        if optional_column in subs.columns: display_columns.append(optional_column)
+
+    return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
+
+
+def load_roster(url, canonical_team_names=None):
+    df = read_table_from_sheet(url, required_headers=["Position", "Name", "Team"])
+    return normalize_roster(df, canonical_team_names)
+
+
+def load_subs(url):
+    df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
+    return normalize_subs(df)
+
+
+def is_goalie(position):
+    value = str(position).strip().upper()
+    return value in {"G", "GOAL", "GOALIE", "GOALTENDER"} or value.startswith("GOAL")
+
+
+def format_rating(value):
+    return f"{float(value):g}"
+
+
+# UI START
+st.title("Hockey Sub Finder")
+league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
+config = LEAGUE_CONFIG[league]
+
+# Load Subs
+try:
+    subs_df = load_subs(config["Sub_Sheet"])
+except Exception as error:
+    st.error(f"Could not load the {league} sub sheet: {error}")
+    st.stop()
+
+# Filter by Eligibility (if the league requires it)
+eligibility_column = config.get("Sub_Eligibility_Column")
+eligibility_value = config.get("Sub_Eligibility_Value")
+if eligibility_column:
+    if eligibility_column not in subs_df.columns:
+        st.error(f"Could not find required `{eligibility_column}` column in {league} sub sheet.")
+        st.stop()
+    subs_df = subs_df[subs_df[eligibility_column].map(lambda value: value_matches(value, eligibility_value))].copy()
+
+# Load Rosters
+roster_df = pd.DataFrame()
+roster_error = None
+try:
+    roster_df = load_roster(config["Roster_Sheet"], config.get("Team_Names"))
+except Exception as error:
+    roster_error = error
+
+st.subheader("1. Select Missing Player")
+
+if not roster_df.empty:
+    team_list = [
+        team_name for team_name in config.get("Team_Names", sorted(roster_df["Team"].drop_duplicates()))
+        if team_name in set(roster_df["Team"])
+    ]
+    selected_team = st.selectbox("Select Team", team_list)
+
+    team_roster = roster_df[roster_df["Team"] == selected_team].copy()
+    
+    # EXPLICIT SORTING: Ensure highest rated players appear at the top of the dropdown
+    team_roster = team_roster.sort_values(by=["Rating", "Name"], ascending=[False, True])
+    
+    team_roster["Label"] = team_roster.apply(
+        lambda row: f"{row['Name']} - {row['Position']} - {format_rating(row['Rating'])}", axis=1
+    )
+
+    selected_label = st.selectbox("Missing Player", team_roster["Label"].tolist())
+    player_row = team_roster[team_roster["Label"] == selected_label].iloc[0]
+    target_rating = float(player_row["Rating"])
+    target_position = player_row["Position"]
+
+    st.info(f"Targeting: {player_row['Name']} (Rating: {format_rating(target_rating)} | Pos: {target_position})")
+else:
+    st.warning(f"Roster could not be loaded for {league}: {roster_error}. Enter the missing player's rating and position manually.")
+    selected_team = None
+    target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
+    target_position = st.selectbox("Missing Player Position", ["F", "D", "G", "E"])
+
+st.subheader("2. Eligible Subs")
+
+col_date, col_sched = st.columns(2)
+with col_date:
+    target_date = st.date_input("Game Date (For Demo Purposes)", datetime.date.today())
+with col_sched:
+    st.markdown("<br>", unsafe_allow_html=True)
+    check_schedule = st.checkbox("Check Schedules (Demo)", value=True, help="Placeholder for future schedule integration.")
+
+st.markdown("---")
+
+col1, col2 = st.columns(2)
+with col1:
+    playoffs = st.checkbox("Playoffs Mode (Strictly Lower Rating)")
+    rating_cutoff = target_rating - 1 if playoffs else target_rating
+with col2:
+    default_min = max(0.0, float(rating_cutoff) - 10.0)
+    min_rating = st.number_input("Minimum Rating Filter", min_value=0.0, max_value=float(rating_cutoff), value=default_min, step=1.0)
+
+eligible = subs_df[(subs_df["Rating"] <= rating_cutoff) & (subs_df["Rating"] >= min_rating)].copy()
+
+if is_goalie(target_position):
+    eligible = eligible[eligible["Position"].map(is_goalie)]
+else:
+    eligible = eligible[~eligible["Position"].map(is_goalie)]
+
+if selected_team and not roster_df.empty:
+    current_team_names = set(roster_df.loc[roster_df["Team"] == selected_team, "Name"])
+    eligible = eligible[~eligible["Name"].isin(current_team_names)]
+
+display_cols = ["Name", "Rating", "Position"]
+
+# Placeholder Schedule Status
+if check_schedule:
+    eligible["Schedule Status"] = "Free"
+    display_cols.insert(1, "Schedule Status")
+
+st.caption(f"Showing {len(eligible)} eligible sub(s) between {format_rating(min_rating)} and {format_rating(rating_cutoff)}.")
+
+column_config = {}
+if "NA" in eligible.columns: display_cols.append("NA")
+
+if "Phone" in eligible.columns:
+    display_cols.append("Phone")
+    eligible["Send Text"] = eligible["Phone"].apply(
+        lambda x: f"sms:{re.sub(r'[^0-9]', '', str(x))}" if pd.notna(x) and str(x).strip() else None
+    )
+    display_cols.append("Send Text")
+    column_config["Send Text"] = st.column_config.LinkColumn("Text Link", display_text="💬 Text")
+
+if "Email" in eligible.columns:
+    display_cols.append("Email")
+    eligible["Send Email"] = eligible["Email"].apply(
+        lambda x: f"mailto:{str(x).strip()}" if pd.notna(x) and str(x).strip() else None
+    )
+    display_cols.append("Send Email")
+    column_config["Send Email"] = st.column_config.LinkColumn("Email Link", display_text="📧 Email")
+
+st.dataframe(eligible[display_cols], width="stretch", hide_index=True, column_config=column_config)
+
+st.markdown("---")
+sheet_view_link = config['Sub_Sheet'].replace("/export?format=csv&", "/edit?")
+st.markdown(f"<div style='text-align: center;'><small><b>Need an exception?</b> <br> <a href='{sheet_view_link}' target='_blank'>View the full {league} Sub List source data</a></small></div>", unsafe_allow_html=True)
