@@ -102,12 +102,10 @@ def normalize_subs(df):
 
     subs = df.copy()
     subs["Name"] = (subs["First Name"].map(clean_text) + " " + subs["Last Name"].map(clean_text)).map(clean_text)
-    
-    # Create Alpha-Only key for flawless cross-referencing
     subs["JoinKey"] = subs["Name"].apply(lambda x: re.sub(r'[^A-Z]', '', str(x).upper()))
-    
     subs["Position"] = subs["Position"].map(clean_text)
     subs["Rating"] = pd.to_numeric(subs["Rating"], errors="coerce")
+    
     for optional_column in ["Email", "Phone", "NA"]:
         if optional_column in subs.columns:
             subs[optional_column] = subs[optional_column].map(clean_text)
@@ -121,14 +119,17 @@ def normalize_subs(df):
 
     return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True])
 
+
 @st.cache_data(ttl=3600)
 def get_web_rosters(league_page_url):
-    """Scrapes SportsEngine using pure Regex to build a master roster of all teams."""
+    """Pure Regex Scraper to extract rosters directly from HTML."""
     if not league_page_url or is_placeholder_url(league_page_url):
-        return pd.DataFrame()
+        return pd.DataFrame(), "Invalid League URL provided."
 
     roster_list = []
-    # Spoof headers to prevent SportsEngine from blocking the request as a bot
+    error_log = ""
+    
+    # Spoof Headers to bypass basic Cloudflare/SportsEngine blocks
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -144,12 +145,14 @@ def get_web_rosters(league_page_url):
             base_resp = session.get(league_page_url, timeout=20)
             base_resp.raise_for_status()
             
-            # Find the team links nested in the page
+            # Find all teams
             match_children = re.search(r'<ul class="children" id="child_nodes">(.*?)</ul>', base_resp.text, re.DOTALL)
             if not match_children:
-                return pd.DataFrame()
+                return pd.DataFrame(), "Could not find team list on League Page. Is the URL correct?"
                 
             team_links = re.findall(r'<a href="(/page/show/(\d+)[^"]*\?subseason=(\d+))"[^>]*>(.*?)</a>', match_children.group(1))
+            if not team_links:
+                return pd.DataFrame(), "Could not parse team URLs from League Page."
             
             for path, team_id, subseason_id, team_name in team_links:
                 team_name_clean = team_name.replace('&amp;', '&').strip()
@@ -157,37 +160,65 @@ def get_web_rosters(league_page_url):
                 
                 try:
                     r_resp = session.get(roster_url, timeout=15)
-                    # Pure Regex to hunt for "Last, First" name structures inside HTML table rows
+                    r_resp.raise_for_status()
+                    
                     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', r_resp.text, re.DOTALL)
+                    name_idx, pos_idx = -1, -1
+                    
+                    # 1. Identify Table Columns
                     for row in rows:
-                        clean_row = re.sub(r'<[^>]+>', ' ', row) # Strip HTML tags
-                        # Match name formats like "Doe, John" or "O'Connor, Tim"
-                        match = re.search(r'([A-Za-z\-\']+(?: [A-Za-z\-\']+)?,\s*[A-Za-z\-\']+(?: [A-Za-z\-\']+)?)', clean_row)
-                        if match:
-                            name = clean_player_name(match.group(1))
-                            roster_list.append({
-                                "Name": name,
-                                "Team": team_name_clean,
-                                "Position": "F" # Position defaults to F, Subs handle specific pos matching
-                            })
-                except Exception:
+                        if '<th' in row.lower():
+                            ths = re.findall(r'<th[^>]*>(.*?)</th>', row, re.IGNORECASE | re.DOTALL)
+                            ths = [re.sub(r'<[^>]+>', '', th).strip().lower() for th in ths]
+                            for i, h in enumerate(ths):
+                                if 'player' in h or 'name' in h: name_idx = i
+                                elif 'pos' in h: pos_idx = i
+                            break
+                    
+                    # 2. Extract Players
+                    if name_idx != -1:
+                        for row in rows:
+                            if '<td' in row.lower():
+                                cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.IGNORECASE | re.DOTALL)
+                                if len(cells) > name_idx:
+                                    raw_name = re.sub(r'<[^>]+>', '', cells[name_idx]).strip()
+                                    if raw_name and raw_name.lower() != 'nan' and 'not assigned' not in raw_name.lower():
+                                        p_pos = "F"
+                                        if pos_idx != -1 and len(cells) > pos_idx:
+                                            p_pos = re.sub(r'<[^>]+>', '', cells[pos_idx]).strip()
+                                            if not p_pos: p_pos = "F"
+                                        
+                                        roster_list.append({
+                                            "Name": clean_player_name(raw_name),
+                                            "Team": team_name_clean,
+                                            "Position": p_pos
+                                        })
+                    else:
+                        error_log += f" [No Name header found in table for {team_name_clean}]"
+                except Exception as e:
+                    error_log += f" [Failed {team_name_clean}: {str(e)[:50]}]"
                     continue
+                    
+    except requests.exceptions.HTTPError as e:
+        return pd.DataFrame(), f"HTTP Error fetching League Page: {e.response.status_code}. Are we blocked?"
     except Exception as e:
-        return pd.DataFrame()
+        return pd.DataFrame(), f"Connection Error: {e}"
 
     df = pd.DataFrame(roster_list)
-    return df.drop_duplicates() if not df.empty else df
+    if df.empty:
+        return df, f"Parsed 0 players. Trace: {error_log}"
+    
+    return df.drop_duplicates(), ""
+
 
 @st.cache_data(ttl=600)
 def get_web_schedule(league_page_url, target_date):
-    """Scrapes SportsEngine via Regex to find the game schedule for a specific date."""
+    """Pure Regex Scraper to extract game times directly from HTML."""
     schedule_map = {}
     if not league_page_url or is_placeholder_url(league_page_url):
         return schedule_map
 
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
     try:
         verify = certifi.where() if certifi else True
         with requests.Session() as session:
@@ -197,7 +228,6 @@ def get_web_schedule(league_page_url, target_date):
             base_resp = session.get(league_page_url, timeout=20)
             base_resp.raise_for_status()
             
-            # Find the link to the daily schedule
             match_sched = re.search(r'href="(?:https?://[^/]+)?(/schedule/day/league_instance/\d+\?subseason=\d+)"', base_resp.text)
             if match_sched:
                 sched_path = match_sched.group(1).replace('&amp;', '&')
@@ -205,30 +235,28 @@ def get_web_schedule(league_page_url, target_date):
                 full_url = f"https://www.nahlpgh-mgmt.com{parts[0]}/{target_date.year}/{target_date.month}/{target_date.day}?{parts[1]}"
                 
                 sched_resp = session.get(full_url, timeout=20)
-                # Regex out the game rows
+                
                 rows = re.findall(r'<tr id="game_list_row_[^>]*>(.*?)</tr>', sched_resp.text, re.DOTALL)
                 for row in rows:
                     teams = re.findall(r'<a class="teamName"[^>]*>([^<]+)</a>', row)
                     if len(teams) >= 2:
-                        visitor, home = teams[0].strip().upper(), teams[1].strip().upper()
+                        visitor = teams[0].replace('&amp;', '&').strip().upper()
+                        home = teams[1].replace('&amp;', '&').strip().upper()
                         
                         loc_match = re.search(r'<div class="scheduleListTeam">\s*([^<a]+?)\s*</div>', row)
-                        location = loc_match.group(1).strip() if loc_match else "Rink"
+                        location = loc_match.group(1).strip() if loc_match else "Unknown Rink"
                         
                         time_match = re.search(r'<span>([^<]+)</span>', row)
                         time_str = time_match.group(1).replace(' EDT', '').replace(' EST', '').strip() if time_match else "Game"
                         
-                        status_str = f"{time_str} ({location})"
-                        schedule_map[visitor] = status_str
-                        schedule_map[home] = status_str
+                        time_loc = f"{time_str} ({location})"
+                        schedule_map[visitor] = time_loc
+                        schedule_map[home] = time_loc
     except Exception:
         pass
         
     return schedule_map
 
-def load_subs(url):
-    df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
-    return normalize_subs(df)
 
 def is_goalie(position):
     value = str(position).strip().upper()
@@ -237,6 +265,7 @@ def is_goalie(position):
 def format_rating(value):
     return f"{float(value):g}"
 
+# UI START
 st.title("Hockey Sub Finder")
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
 config = LEAGUE_CONFIG[league]
@@ -247,7 +276,6 @@ except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
 
-# Eligibility filtering
 eligibility_column = config.get("Sub_Eligibility_Column")
 eligibility_value = config.get("Sub_Eligibility_Value")
 if eligibility_column:
@@ -256,27 +284,24 @@ if eligibility_column:
         st.stop()
     subs_df = subs_df[subs_df[eligibility_column].map(lambda value: value_matches(value, eligibility_value))].copy()
 
-# Load Web Rosters
+# Load Web Rosters using the new trace-reporting function
 roster_error = None
 with st.spinner(f"Syncing live rosters from the {league} website..."):
-    raw_roster_df = get_web_rosters(config.get("League_Page"))
+    raw_roster_df, fetch_error = get_web_rosters(config.get("League_Page"))
 
 if not raw_roster_df.empty:
     roster_df = raw_roster_df.copy()
     roster_df['JoinKey'] = roster_df['Name'].apply(lambda x: re.sub(r'[^A-Z]', '', str(x).upper()))
     
-    # Merge ratings from Sub Sheet
     rating_map = dict(zip(subs_df['JoinKey'], subs_df['Rating']))
     pos_map = dict(zip(subs_df['JoinKey'], subs_df['Position']))
     
     roster_df['Rating'] = roster_df['JoinKey'].map(rating_map).fillna(100.0)
-    # Update positions to what they are classified as in the Sub Sheet (F/D/G/E)
     roster_df['Position'] = roster_df['JoinKey'].map(pos_map).fillna(roster_df['Position'])
-    
     roster_df = roster_df.sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
 else:
     roster_df = pd.DataFrame()
-    roster_error = "Could not reach the SportsEngine League Page."
+    roster_error = fetch_error
 
 st.subheader("1. Select Missing Player")
 
@@ -298,7 +323,8 @@ if not roster_df.empty:
 
     st.info(f"Targeting: {player_row['Name']} (Rating: {format_rating(target_rating)} | Pos: {target_position})")
 else:
-    st.warning(f"Roster could not be loaded for {league}: {roster_error} Enter the missing player's rating and position manually.")
+    # Explicitly show the trace error so we know why the scraper failed
+    st.warning(f"Roster could not be loaded for {league}. Trace Error: {roster_error}. Enter the missing player's rating and position manually.")
     selected_team = None
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
     target_position = st.selectbox("Missing Player Position", ["F", "D", "G", "E"])
