@@ -1,3 +1,4 @@
+import datetime
 from io import StringIO
 import re
 
@@ -21,7 +22,7 @@ LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
-        "Schedule_Sheet": "YOUR_NAHL_SCHEDULE_CSV_URL_HERE",
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9527885-nahl-nahl-54-",
         "Sub_Eligibility_Column": "NA",
         "Sub_Eligibility_Value": "Y",
         "Team_Names": [
@@ -38,20 +39,20 @@ LEAGUE_CONFIG = {
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
-        "Schedule_Sheet": "YOUR_CVHL_SCHEDULE_CSV_URL_HERE",
-        # Notice no NA requirement for CVHL subs
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9489537-cvhl-cvhl-18-",
+        # No NA requirement for CVHL subs
     },
     "OFHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
-        "Schedule_Sheet": "YOUR_OFHL_SCHEDULE_CSV_URL_HERE",
-        # Notice no NA requirement for OFHL subs
+        "League_Page": "https://www.nahlpgh-mgmt.com/page/show/9489545-ofhl-ofhl-17-",
+        # No NA requirement for OFHL subs
     }
 }
 
+
 def is_placeholder_url(url):
     return not url or "YOUR_" in url
-
 
 @st.cache_data(ttl=300)
 def fetch_csv_text(url):
@@ -217,6 +218,71 @@ def normalize_subs(df):
 
     return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
 
+@st.cache_data(ttl=600)
+def get_daily_schedule(league_page_url, target_date, canonical_team_names):
+    """Scrapes the SportsEngine schedule to find games on the target date."""
+    if not league_page_url or is_placeholder_url(league_page_url):
+        return {}
+
+    try:
+        verify = certifi.where() if certifi else True
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        
+        # 1. Fetch base page to find the underlying schedule URL for the season
+        base_resp = requests.get(league_page_url, timeout=20, verify=verify, headers=headers)
+        base_resp.raise_for_status()
+        
+        match = re.search(r'href="(?:https?://[^/]+)?(/schedule/day/league_instance/\d+\?subseason=\d+)"', base_resp.text)
+        if not match:
+            return {}
+            
+        sched_path = match.group(1).replace('&amp;', '&')
+        parts = sched_path.split('?')
+        
+        # 2. Inject the specific Game Date into the schedule URL
+        date_path = f"{parts[0]}/{target_date.year}/{target_date.month}/{target_date.day}?{parts[1]}"
+        full_url = "https://www.nahlpgh-mgmt.com" + date_path
+        
+        # 3. Fetch the daily schedule HTML
+        sched_resp = requests.get(full_url, timeout=20, verify=verify, headers=headers)
+        sched_resp.raise_for_status()
+        
+        # 4. Use Pandas to parse the HTML table
+        dfs = pd.read_html(StringIO(sched_resp.text))
+        sched_df = None
+        for df in dfs:
+            if 'Visitor' in df.columns and 'Home' in df.columns and 'Location' in df.columns:
+                sched_df = df
+                break
+                
+        if sched_df is None:
+            return {}
+            
+        # 5. Extract games and map to canonical team names
+        schedule_map = {}
+        for _, row in sched_df.iterrows():
+            visitor = str(row.get('Visitor', '')).strip()
+            home = str(row.get('Home', '')).strip()
+            location = str(row.get('Location', '')).strip()
+            status = str(row.get('Status', '')).replace(' EDT', '').replace(' EST', '').strip()
+            
+            if status == 'nan': status = 'Game'
+            if location == 'nan': location = 'Unknown Rink'
+            
+            time_loc = f"{status} ({location})"
+            
+            v_canon = canonicalize_team_name(visitor, canonical_team_names)
+            h_canon = canonicalize_team_name(home, canonical_team_names)
+            
+            schedule_map[v_canon] = time_loc
+            schedule_map[h_canon] = time_loc
+            
+        return schedule_map
+    except Exception as e:
+        # Silently fail if web scraping breaks to prevent app crashes
+        return {}
+
+
 def load_roster(url, canonical_team_names=None):
     df = read_table_from_sheet(url, required_headers=["Name", "Team"])
     return normalize_roster(df, canonical_team_names)
@@ -310,9 +376,18 @@ else:
 
 st.subheader("2. Eligible Subs")
 
+col_date, col_sched = st.columns(2)
+with col_date:
+    target_date = st.date_input("Game Date (For Schedule Check)", datetime.date.today())
+with col_sched:
+    st.markdown("<br>", unsafe_allow_html=True)
+    check_schedule = st.checkbox("Check Live Web Schedules", value=True, help="Scrapes the league website to see if subs are already at the rink.")
+
+st.markdown("---")
+
 col1, col2 = st.columns(2)
 with col1:
-    playoffs = st.checkbox("Playoffs")
+    playoffs = st.checkbox("Playoffs Mode (Strictly Lower Rating)")
     rating_cutoff = target_rating - 1 if playoffs else target_rating
 
 with col2:
@@ -340,13 +415,36 @@ if selected_team and not roster_df.empty:
     current_team_names = set(roster_df.loc[roster_df["Team"] == selected_team, "Name"])
     eligible = eligible[~eligible["Name"].isin(current_team_names)]
 
+display_cols = ["Name", "Rating", "Position"]
+
+# Check Live Schedule
+if check_schedule and not roster_df.empty:
+    with st.spinner("Checking live web schedule..."):
+        schedule_map = get_daily_schedule(config.get("League_Page"), target_date, config.get("Team_Names"))
+        
+    # Create quick lookup map for Player -> Team
+    player_to_team = dict(zip(roster_df['Name'].str.upper(), roster_df['Team']))
+    
+    def get_status(player_name):
+        team = player_to_team.get(str(player_name).upper())
+        if not team:
+            return "Free"
+        
+        game = schedule_map.get(team)
+        if game:
+            short_team = team.split(' - ')[0] # E.g., 'Hells Kitchen' instead of 'Hells Kitchen - Shane'
+            return f"At Rink: {game} ({short_team})"
+        return "Free"
+        
+    eligible["Schedule Status"] = eligible["Name"].map(get_status)
+    display_cols.insert(1, "Schedule Status") # Put Schedule Status immediately after Name
+
 st.caption(
     f"Showing {len(eligible)} eligible sub(s) between {format_rating(min_rating)} and {format_rating(rating_cutoff)}."
 )
 
 # Build interactive columns for 1-click mobile messaging
 column_config = {}
-display_cols = ["Name", "Rating", "Position"]
 
 if "NA" in eligible.columns:
     display_cols.append("NA")
