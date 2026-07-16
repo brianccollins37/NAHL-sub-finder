@@ -8,7 +8,7 @@ import streamlit as st
 
 try:
     import certifi
-except ImportError:  # pragma: no cover - only used on machines missing certifi
+except ImportError:
     certifi = None
 
 st.set_page_config(
@@ -17,22 +17,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+MASTER_SCHEDULE_URL = "https://docs.google.com/spreadsheets/d/1wi75UkV9rdhvsys2dAVDG2n1B0bGznIE1wISeLoUBWM/export?format=csv&gid=0"
+
 LEAGUE_CONFIG = {
     "NAHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
         "Roster_Sheet": "https://docs.google.com/spreadsheets/d/15mWSFY4vfarNrKh49SoXsOqCJFiUz8y68JGSemtVzv4/export?format=csv&gid=0",
         "Sub_Eligibility_Column": "NA",
         "Sub_Eligibility_Value": "Y",
-        "Team_Names": [
-            "Hells Kitchen - Shane",
-            "No Regretskys - Deemer",
-            "VIP After Hours - Ruefle",
-            "Disco Biscuits - Hilborn",
-            "8 Ball - Stevo",
-            "Goal Diggers - BC",
-            "5 Hole Strut - Ulrich",
-            "Funkytown - Murawski",
-        ],
     },
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
@@ -44,105 +36,74 @@ LEAGUE_CONFIG = {
     }
 }
 
-
 def is_placeholder_url(url):
     return not url or "YOUR_" in url
-
 
 @st.cache_data(ttl=300)
 def fetch_csv_text(url):
     if is_placeholder_url(url):
         raise ValueError("This sheet URL is still a placeholder.")
-
     verify = certifi.where() if certifi else True
     response = requests.get(url, timeout=20, verify=verify)
     response.raise_for_status()
     return response.text
 
-
 def find_header_row(rows, required_headers):
     required = {header.lower() for header in required_headers}
-
     for index, row in enumerate(rows):
         normalized = {str(cell).strip().lower() for cell in row if str(cell).strip()}
         if required.issubset(normalized):
             return index
-
     return None
-
 
 def read_table_from_sheet(url, required_headers):
     csv_text = fetch_csv_text(url)
     raw_rows = pd.read_csv(StringIO(csv_text), header=None, dtype=str).fillna("")
     header_row = find_header_row(raw_rows.values.tolist(), required_headers)
-
     if header_row is None:
-        raise ValueError(
-            "Could not find a table header containing: "
-            + ", ".join(required_headers)
-        )
-
+        raise ValueError("Could not find a table header containing: " + ", ".join(required_headers))
     df = pd.read_csv(StringIO(csv_text), header=header_row, dtype=str).fillna("")
     df.columns = [str(column).strip() for column in df.columns]
     df = df.loc[:, [column for column in df.columns if not column.startswith("Unnamed")]]
     return df
 
-
 def clean_player_name(name):
     name = clean_text(name)
     if "," not in name:
         return name
-
     last, first = [part.strip() for part in name.split(",", 1)]
     return f"{first} {last}".strip()
-
 
 def clean_text(value):
     value = str(value).replace("\xa0", " ")
     return re.sub(r"\s+", " ", value).strip()
 
-
 def value_matches(value, expected_value):
     return clean_text(value).upper() == clean_text(expected_value).upper()
 
+def fuzzy_match_team(team_a, team_b):
+    """
+    Fuzzy matches teams by stripping all spaces/punctuation and checking for substrings.
+    Matches 'Disco Biscuits - Hilborn' to 'Disco Biscuits' perfectly.
+    """
+    if not team_a or not team_b:
+        return False
+    a_clean = re.sub(r'[^a-z0-9]', '', str(team_a).lower())
+    b_clean = re.sub(r'[^a-z0-9]', '', str(team_b).lower())
+    if not a_clean or not b_clean:
+        return False
+    return a_clean in b_clean or b_clean in a_clean
 
-def team_signature(team_name):
-    team_name = clean_text(team_name)
-    parts = [part.strip() for part in team_name.split(" - ", 1)]
-    team_part = re.sub(r"^\d+\s+", "", parts[0]).strip()
-
-    if len(parts) == 1:
-        return team_part.lower()
-
-    return f"{team_part} - {parts[1]}".lower()
-
-
-def canonicalize_team_name(team_name, canonical_team_names):
-    team_name = clean_text(team_name)
-    if not canonical_team_names:
-        return team_name
-
-    canonical_lookup = {clean_text(name): clean_text(name) for name in canonical_team_names}
-    if team_name in canonical_lookup:
-        return canonical_lookup[team_name]
-
-    signature_lookup = {
-        team_signature(name): clean_text(name)
-        for name in canonical_team_names
-    }
-    return signature_lookup.get(team_signature(team_name), team_name)
-
-
-def normalize_roster(df, canonical_team_names=None):
+def normalize_roster(df):
     column_map = {
         "Position": "Position",
+        "Pos": "Position",
         "Name": "Name",
+        "Player": "Name",
         "Rating": "Rating",
-        "Rating ": "Rating",
         "Team": "Team",
     }
-
-    df = df.rename(columns={column: column_map.get(column, column) for column in df.columns})
+    df = df.rename(columns={col: column_map.get(str(col).strip(), col) for col in df.columns})
     required = ["Name", "Team", "Rating", "Position"]
     missing = [column for column in required if column not in df.columns]
     if missing:
@@ -150,15 +111,11 @@ def normalize_roster(df, canonical_team_names=None):
 
     roster = df[required].copy()
     roster["Name"] = roster["Name"].map(clean_player_name)
-    roster["Team"] = roster["Team"].map(
-        lambda team_name: canonicalize_team_name(team_name, canonical_team_names)
-    )
     roster["Position"] = roster["Position"].map(clean_text)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
     roster = roster.dropna(subset=["Name", "Team", "Rating", "Position"])
     roster = roster[(roster["Name"] != "") & (roster["Team"] != "")]
     return roster.sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
-
 
 def normalize_subs(df):
     col_mapping = {}
@@ -196,27 +153,41 @@ def normalize_subs(df):
 
     return subs[display_columns].sort_values(["Rating", "Name"], ascending=[False, True])
 
+@st.cache_data(ttl=300)
+def load_roster(url):
+    df = read_table_from_sheet(url, required_headers=["Name", "Team"])
+    return normalize_roster(df)
 
-def load_roster(url, canonical_team_names=None):
-    df = read_table_from_sheet(url, required_headers=["Position", "Name", "Team"])
-    return normalize_roster(df, canonical_team_names)
-
-
+@st.cache_data(ttl=300)
 def load_subs(url):
     df = read_table_from_sheet(url, required_headers=["First Name", "Last Name"])
     return normalize_subs(df)
 
+@st.cache_data(ttl=300)
+def get_daily_schedule(target_date):
+    """Pulls the master schedule from Google Sheets and filters for the target date."""
+    try:
+        # Looking for columns: Date, Time, Rink, Home, Away
+        df = read_table_from_sheet(MASTER_SCHEDULE_URL, required_headers=["Date", "Time", "Rink", "Home", "Away"])
+        
+        # The sheet date is M/D or MM/DD format without year.
+        search_date_1 = f"{target_date.month}/{target_date.day}"  # e.g. 6/1
+        search_date_2 = f"{target_date.strftime('%m/%d')}"        # e.g. 06/01
+        
+        # Filter down to just the games played on this date
+        daily_games = df[df['Date'].str.strip().isin([search_date_1, search_date_2])]
+        return daily_games
+    except Exception as e:
+        return pd.DataFrame()
 
 def is_goalie(position):
     value = str(position).strip().upper()
     return value in {"G", "GOAL", "GOALIE", "GOALTENDER"} or value.startswith("GOAL")
 
-
 def format_rating(value):
     return f"{float(value):g}"
 
-
-# UI START
+# --- UI START ---
 st.title("Hockey Sub Finder")
 league = st.selectbox("League", list(LEAGUE_CONFIG.keys()))
 config = LEAGUE_CONFIG[league]
@@ -228,7 +199,7 @@ except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
 
-# Filter by Eligibility (if the league requires it)
+# Eligibility filter for NAHL
 eligibility_column = config.get("Sub_Eligibility_Column")
 eligibility_value = config.get("Sub_Eligibility_Value")
 if eligibility_column:
@@ -238,25 +209,21 @@ if eligibility_column:
     subs_df = subs_df[subs_df[eligibility_column].map(lambda value: value_matches(value, eligibility_value))].copy()
 
 # Load Rosters
-roster_df = pd.DataFrame()
 roster_error = None
 try:
-    roster_df = load_roster(config["Roster_Sheet"], config.get("Team_Names"))
+    with st.spinner(f"Loading {league} rosters..."):
+        roster_df = load_roster(config["Roster_Sheet"])
 except Exception as error:
+    roster_df = pd.DataFrame()
     roster_error = error
 
 st.subheader("1. Select Missing Player")
 
 if not roster_df.empty:
-    team_list = [
-        team_name for team_name in config.get("Team_Names", sorted(roster_df["Team"].drop_duplicates()))
-        if team_name in set(roster_df["Team"])
-    ]
+    team_list = sorted(roster_df["Team"].drop_duplicates())
     selected_team = st.selectbox("Select Team", team_list)
 
     team_roster = roster_df[roster_df["Team"] == selected_team].copy()
-    
-    # EXPLICIT SORTING: Ensure highest rated players appear at the top of the dropdown
     team_roster = team_roster.sort_values(by=["Rating", "Name"], ascending=[False, True])
     
     team_roster["Label"] = team_roster.apply(
@@ -270,7 +237,7 @@ if not roster_df.empty:
 
     st.info(f"Targeting: {player_row['Name']} (Rating: {format_rating(target_rating)} | Pos: {target_position})")
 else:
-    st.warning(f"Roster could not be loaded for {league}: {roster_error}. Enter the missing player's rating and position manually.")
+    st.warning(f"Roster could not be loaded for {league}: {roster_error}")
     selected_team = None
     target_rating = st.number_input("Missing Player Rating", min_value=0.0, value=100.0, step=1.0)
     target_position = st.selectbox("Missing Player Position", ["F", "D", "G", "E"])
@@ -279,10 +246,10 @@ st.subheader("2. Eligible Subs")
 
 col_date, col_sched = st.columns(2)
 with col_date:
-    target_date = st.date_input("Game Date (For Demo Purposes)", datetime.date.today())
+    target_date = st.date_input("Game Date", datetime.date.today())
 with col_sched:
     st.markdown("<br>", unsafe_allow_html=True)
-    check_schedule = st.checkbox("Check Schedules (Demo)", value=True, help="Placeholder for future schedule integration.")
+    check_schedule = st.checkbox("Check Master Schedule", value=True, help="Checks the Master Google Sheet to see if players have a game on this date.")
 
 st.markdown("---")
 
@@ -307,9 +274,36 @@ if selected_team and not roster_df.empty:
 
 display_cols = ["Name", "Rating", "Position"]
 
-# Placeholder Schedule Status
+# Evaluate Schedule Overlaps
 if check_schedule:
-    eligible["Schedule Status"] = "Free"
+    with st.spinner("Checking schedule overlaps..."):
+        daily_games_df = get_daily_schedule(target_date)
+        
+    if not roster_df.empty and not daily_games_df.empty:
+        # Create a dictionary mapping Player Name -> Team Name
+        player_teams = dict(zip(roster_df['Name'].apply(clean_text), roster_df['Team']))
+        
+        def get_game_status(player_name):
+            p_name = clean_text(player_name)
+            team_name = player_teams.get(p_name)
+            
+            if not team_name:
+                return "Free"
+                
+            # Check if this team is playing today using fuzzy matching
+            for _, game in daily_games_df.iterrows():
+                if fuzzy_match_team(team_name, game['Home']) or fuzzy_match_team(team_name, game['Away']):
+                    time = str(game['Time']).strip()
+                    rink = str(game['Rink']).strip()
+                    return f"At Rink: {time} ({rink})"
+                    
+            return "Free"
+            
+        eligible["Schedule Status"] = eligible["Name"].apply(get_game_status)
+    else:
+        # Fallback if no games are found or roster failed
+        eligible["Schedule Status"] = "Free"
+        
     display_cols.insert(1, "Schedule Status")
 
 st.caption(f"Showing {len(eligible)} eligible sub(s) between {format_rating(min_rating)} and {format_rating(rating_cutoff)}.")
