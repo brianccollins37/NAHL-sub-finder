@@ -288,8 +288,12 @@ if check_schedule and target_date:
         if selected_team:
             for _, game in daily_games_df.iterrows():
                 if fuzzy_match_team(selected_team, game['Home']) or fuzzy_match_team(selected_team, game['Away']):
-                    # Clean up weird characters from the schedule sheet
-                    clean_time = re.sub(r'[^\w\s:]', '', str(game['Time'])).strip()
+                    # Clean up weird unicode characters from the schedule sheet
+                    raw_time = str(game['Time'])
+                    # Keep only standard letters, numbers, and colons. Replace the rest with a space.
+                    clean_time = re.sub(r'[^a-zA-Z0-9:]', ' ', raw_time)
+                    clean_time = re.sub(r'\s+', ' ', clean_time).strip()
+                    
                     clean_rink = str(game['Rink']).strip()
                     captain_game_time = f"{clean_time} ({clean_rink})"
                     break
@@ -308,7 +312,10 @@ if check_schedule and target_date:
             for _, game in daily_games_df.iterrows():
                 if fuzzy_match_team(team_name, game['Home']) or fuzzy_match_team(team_name, game['Away']):
                     # Clean up the status text to prevent character encoding issues
-                    clean_time = re.sub(r'[^\w\s:]', '', str(game['Time'])).strip()
+                    raw_time = str(game['Time'])
+                    clean_time = re.sub(r'[^a-zA-Z0-9:]', ' ', raw_time)
+                    clean_time = re.sub(r'\s+', ' ', clean_time).strip()
+                    
                     clean_rink = str(game['Rink']).strip()
                     return f"At Rink: {clean_time} ({clean_rink})"
                     
