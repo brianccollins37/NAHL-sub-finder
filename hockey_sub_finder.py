@@ -167,14 +167,11 @@ def load_subs(url):
 def get_daily_schedule(target_date):
     """Pulls the master schedule from Google Sheets and filters for the target date."""
     try:
-        # Looking for columns: Date, Time, Rink, Home, Away
         df = read_table_from_sheet(MASTER_SCHEDULE_URL, required_headers=["Date", "Time", "Rink", "Home", "Away"])
         
-        # The sheet date is M/D or MM/DD format without year.
-        search_date_1 = f"{target_date.month}/{target_date.day}"  # e.g. 6/1
-        search_date_2 = f"{target_date.strftime('%m/%d')}"        # e.g. 06/01
+        search_date_1 = f"{target_date.month}/{target_date.day}"  
+        search_date_2 = f"{target_date.strftime('%m/%d')}"        
         
-        # Filter down to just the games played on this date
         daily_games = df[df['Date'].str.strip().isin([search_date_1, search_date_2])]
         return daily_games
     except Exception as e:
@@ -244,12 +241,16 @@ else:
 
 st.subheader("2. Eligible Subs")
 
+# Set up the optional date picker
 col_date, col_sched = st.columns(2)
 with col_date:
-    target_date = st.date_input("Game Date", datetime.date.today())
-with col_sched:
-    st.markdown("<br>", unsafe_allow_html=True)
-    check_schedule = st.checkbox("Check Master Schedule", value=True, help="Checks the Master Google Sheet to see if players have a game on this date.")
+    target_date = st.date_input("Game Date (Optional)", value=None, help="Select a date to see if subs are already scheduled for another game.")
+
+check_schedule = False
+if target_date:
+    with col_sched:
+        st.markdown("<br>", unsafe_allow_html=True)
+        check_schedule = st.checkbox("Check Master Schedule", value=True)
 
 st.markdown("---")
 
@@ -274,14 +275,28 @@ if selected_team and not roster_df.empty:
 
 display_cols = ["Name", "Rating", "Position"]
 
-# Evaluate Schedule Overlaps
-if check_schedule:
+# Evaluate Schedule Overlaps if requested
+if check_schedule and target_date:
     with st.spinner("Checking schedule overlaps..."):
         daily_games_df = get_daily_schedule(target_date)
         
     if not roster_df.empty and not daily_games_df.empty:
-        # Create a dictionary mapping Player Name -> Team Name
         player_teams = dict(zip(roster_df['Name'].apply(clean_text), roster_df['Team']))
+        
+        # Look up the captain's team status first
+        captain_game_time = None
+        if selected_team:
+            for _, game in daily_games_df.iterrows():
+                if fuzzy_match_team(selected_team, game['Home']) or fuzzy_match_team(selected_team, game['Away']):
+                    # Clean up weird characters from the schedule sheet
+                    clean_time = re.sub(r'[^\w\s:]', '', str(game['Time'])).strip()
+                    clean_rink = str(game['Rink']).strip()
+                    captain_game_time = f"{clean_time} ({clean_rink})"
+                    break
+        
+        # Display the Captain's game context if found
+        if captain_game_time:
+            st.info(f"📍 **Your Game Today:** {selected_team} plays at {captain_game_time}.")
         
         def get_game_status(player_name):
             p_name = clean_text(player_name)
@@ -290,18 +305,18 @@ if check_schedule:
             if not team_name:
                 return "Free"
                 
-            # Check if this team is playing today using fuzzy matching
             for _, game in daily_games_df.iterrows():
                 if fuzzy_match_team(team_name, game['Home']) or fuzzy_match_team(team_name, game['Away']):
-                    time = str(game['Time']).strip()
-                    rink = str(game['Rink']).strip()
-                    return f"At Rink: {time} ({rink})"
+                    # Clean up the status text to prevent character encoding issues
+                    clean_time = re.sub(r'[^\w\s:]', '', str(game['Time'])).strip()
+                    clean_rink = str(game['Rink']).strip()
+                    return f"At Rink: {clean_time} ({clean_rink})"
                     
             return "Free"
             
         eligible["Schedule Status"] = eligible["Name"].apply(get_game_status)
     else:
-        # Fallback if no games are found or roster failed
+        # Fallback if no games are found
         eligible["Schedule Status"] = "Free"
         
     display_cols.insert(1, "Schedule Status")
