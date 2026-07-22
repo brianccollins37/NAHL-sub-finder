@@ -1,4 +1,5 @@
 import datetime
+import difflib
 from io import StringIO
 import re
 
@@ -74,6 +75,11 @@ def clean_player_name(name):
     last, first = [part.strip() for part in name.split(",", 1)]
     return f"{first} {last}".strip()
 
+def get_player_key(name):
+    """Reduces a name to just lowercase letters to guarantee matches."""
+    name = clean_player_name(name)
+    return re.sub(r'[^a-z]', '', str(name).lower())
+
 def clean_text(value):
     value = str(value).replace("\xa0", " ")
     return re.sub(r"\s+", " ", value).strip()
@@ -83,16 +89,32 @@ def value_matches(value, expected_value):
 
 def fuzzy_match_team(team_a, team_b):
     """
-    Fuzzy matches teams by stripping all spaces/punctuation and checking for substrings.
-    Matches 'Disco Biscuits - Hilborn' to 'Disco Biscuits' perfectly.
+    Fuzzy matches teams by stripping all spaces/punctuation. 
+    Includes SequenceMatcher to tolerate slight spelling typos (like Z vs S).
     """
-    if not team_a or not team_b:
+    if pd.isna(team_a) or pd.isna(team_b) or not str(team_a).strip() or not str(team_b).strip():
         return False
+        
     a_clean = re.sub(r'[^a-z0-9]', '', str(team_a).lower())
     b_clean = re.sub(r'[^a-z0-9]', '', str(team_b).lower())
+    
     if not a_clean or not b_clean:
         return False
-    return a_clean in b_clean or b_clean in a_clean
+        
+    # Check for direct substring matches
+    if a_clean in b_clean or b_clean in a_clean:
+        return True
+        
+    # Check for spelling typos using difflib (e.g., noregretskys vs noregretzkysdeemer)
+    shorter = a_clean if len(a_clean) < len(b_clean) else b_clean
+    longer = b_clean if len(a_clean) < len(b_clean) else a_clean
+    
+    # Compare the shorter word against the prefix of the longer word
+    prefix = longer[:len(shorter)]
+    ratio = difflib.SequenceMatcher(None, shorter, prefix).ratio()
+    
+    # 0.85 ratio allows for 1-2 wrong letters in a 12 letter word
+    return ratio > 0.85
 
 def normalize_roster(df):
     column_map = {
@@ -169,10 +191,13 @@ def get_daily_schedule(target_date):
     try:
         df = read_table_from_sheet(MASTER_SCHEDULE_URL, required_headers=["Date", "Time", "Rink", "Home", "Away"])
         
+        # Strip invisible characters from dates just in case
+        df['Clean_Date'] = df['Date'].apply(lambda x: re.sub(r'[^0-9/]', '', str(x)))
+        
         search_date_1 = f"{target_date.month}/{target_date.day}"  
         search_date_2 = f"{target_date.strftime('%m/%d')}"        
         
-        daily_games = df[df['Date'].str.strip().isin([search_date_1, search_date_2])]
+        daily_games = df[df['Clean_Date'].isin([search_date_1, search_date_2])]
         return daily_games
     except Exception as e:
         return pd.DataFrame()
@@ -244,13 +269,13 @@ st.subheader("2. Eligible Subs")
 # Set up the optional date picker
 col_date, col_sched = st.columns(2)
 with col_date:
-    target_date = st.date_input("Game Date (Optional)", value=None, help="Select a date to see if subs are already scheduled for another game.")
+    target_date = st.date_input("Game Date (For Schedule Check)", value=None, help="Select a date to see if subs are already scheduled for another game.")
 
 check_schedule = False
 if target_date:
     with col_sched:
         st.markdown("<br>", unsafe_allow_html=True)
-        check_schedule = st.checkbox("Check Master Schedule", value=True)
+        check_schedule = st.checkbox("Check Live Web Schedules", value=True)
 
 st.markdown("---")
 
@@ -281,7 +306,8 @@ if check_schedule and target_date:
         daily_games_df = get_daily_schedule(target_date)
         
     if not roster_df.empty and not daily_games_df.empty:
-        player_teams = dict(zip(roster_df['Name'].apply(clean_text), roster_df['Team']))
+        # Create hyper-stripped player keys to perfectly match names regardless of formatting
+        player_teams = dict(zip(roster_df['Name'].apply(get_player_key), roster_df['Team']))
         
         # Look up the captain's team status first
         captain_game_time = None
@@ -290,7 +316,6 @@ if check_schedule and target_date:
                 if fuzzy_match_team(selected_team, game['Home']) or fuzzy_match_team(selected_team, game['Away']):
                     # Clean up weird unicode characters from the schedule sheet
                     raw_time = str(game['Time'])
-                    # Keep only standard letters, numbers, and colons. Replace the rest with a space.
                     clean_time = re.sub(r'[^a-zA-Z0-9:]', ' ', raw_time)
                     clean_time = re.sub(r'\s+', ' ', clean_time).strip()
                     
@@ -303,8 +328,8 @@ if check_schedule and target_date:
             st.info(f"📍 **Your Game Today:** {selected_team} plays at {captain_game_time}.")
         
         def get_game_status(player_name):
-            p_name = clean_text(player_name)
-            team_name = player_teams.get(p_name)
+            p_key = get_player_key(player_name)
+            team_name = player_teams.get(p_key)
             
             if not team_name:
                 return "Free"
