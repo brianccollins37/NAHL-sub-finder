@@ -37,6 +37,41 @@ LEAGUE_CONFIG = {
     }
 }
 
+# A dictionary to normalize common nicknames into formal names for perfect matching
+NICKNAME_MAP = {
+    "dan": "daniel", "danny": "daniel",
+    "jim": "james", "jimmy": "james",
+    "mike": "michael", "mikey": "michael",
+    "tom": "thomas", "tommy": "thomas",
+    "matt": "matthew",
+    "dave": "david", "davy": "david",
+    "chris": "christopher",
+    "rob": "robert", "bob": "robert", "bobby": "robert", "robby": "robert",
+    "rich": "richard", "rick": "richard", "ricky": "richard", "dick": "richard",
+    "steve": "stephen", "steven": "stephen",
+    "bill": "william", "billy": "william", "will": "william", "willy": "william",
+    "ben": "benjamin", "benny": "benjamin",
+    "joe": "joseph", "joey": "joseph",
+    "jon": "jonathan", "johnny": "johnathan", "john": "johnathan",
+    "greg": "gregory", "gregg": "gregory",
+    "alex": "alexander",
+    "zach": "zachary", "zack": "zachary",
+    "nick": "nicholas", "nicky": "nicholas",
+    "andy": "andrew", "drew": "andrew",
+    "pat": "patrick", "patty": "patrick",
+    "tim": "timothy", "timmy": "timothy",
+    "ed": "edward", "eddie": "edward", "eddy": "edward",
+    "phil": "philip", "phillip": "philip",
+    "ken": "kenneth", "kenny": "kenneth",
+    "ron": "ronald", "ronnie": "ronald",
+    "jeff": "jeffrey", "geoff": "jeffrey",
+    "tony": "anthony",
+    "sam": "samuel", "sammy": "samuel",
+    "josh": "joshua",
+    "chuck": "charles", "charlie": "charles",
+    "pete": "peter", "petey": "peter"
+}
+
 def is_placeholder_url(url):
     return not url or "YOUR_" in url
 
@@ -76,9 +111,18 @@ def clean_player_name(name):
     return f"{first} {last}".strip()
 
 def get_player_key(name):
-    """Reduces a name to just lowercase letters to guarantee matches."""
+    """Reduces a name to just lowercase letters to guarantee matches, applying nickname rules."""
     name = clean_player_name(name)
-    return re.sub(r'[^a-z]', '', str(name).lower())
+    parts = str(name).lower().split(" ")
+    if parts:
+        # Check if the first name is in our nickname map
+        first_name = parts[0]
+        if first_name in NICKNAME_MAP:
+            parts[0] = NICKNAME_MAP[first_name]
+        # Rejoin the normalized name
+        name = "".join(parts)
+        
+    return re.sub(r'[^a-z]', '', name)
 
 def clean_text(value):
     value = str(value).replace("\xa0", " ")
@@ -101,19 +145,15 @@ def fuzzy_match_team(team_a, team_b):
     if not a_clean or not b_clean:
         return False
         
-    # Check for direct substring matches
     if a_clean in b_clean or b_clean in a_clean:
         return True
         
-    # Check for spelling typos using difflib (e.g., noregretskys vs noregretzkysdeemer)
     shorter = a_clean if len(a_clean) < len(b_clean) else b_clean
     longer = b_clean if len(a_clean) < len(b_clean) else a_clean
     
-    # Compare the shorter word against the prefix of the longer word
     prefix = longer[:len(shorter)]
     ratio = difflib.SequenceMatcher(None, shorter, prefix).ratio()
     
-    # 0.85 ratio allows for 1-2 wrong letters in a 12 letter word
     return ratio > 0.85
 
 def normalize_roster(df):
@@ -221,7 +261,7 @@ except Exception as error:
     st.error(f"Could not load the {league} sub sheet: {error}")
     st.stop()
 
-# Eligibility filter for NAHL
+# Eligibility filter
 eligibility_column = config.get("Sub_Eligibility_Column")
 eligibility_value = config.get("Sub_Eligibility_Value")
 if eligibility_column:
@@ -266,7 +306,6 @@ else:
 
 st.subheader("2. Eligible Subs")
 
-# Set up the optional date picker
 col_date, col_sched = st.columns(2)
 with col_date:
     target_date = st.date_input("Game Date (For Schedule Check)", value=None, help="Select a date to see if subs are already scheduled for another game.")
@@ -295,26 +334,24 @@ else:
     eligible = eligible[~eligible["Position"].map(is_goalie)]
 
 if selected_team and not roster_df.empty:
-    current_team_names = set(roster_df.loc[roster_df["Team"] == selected_team, "Name"])
-    eligible = eligible[~eligible["Name"].isin(current_team_names)]
+    # Use the new get_player_key to ensure robust exclusion
+    current_team_keys = set(roster_df.loc[roster_df["Team"] == selected_team, "Name"].apply(get_player_key))
+    eligible = eligible[~eligible["Name"].apply(get_player_key).isin(current_team_keys)]
 
 display_cols = ["Name", "Rating", "Position"]
 
-# Evaluate Schedule Overlaps if requested
 if check_schedule and target_date:
     with st.spinner("Checking schedule overlaps..."):
         daily_games_df = get_daily_schedule(target_date)
         
     if not roster_df.empty and not daily_games_df.empty:
-        # Create hyper-stripped player keys to perfectly match names regardless of formatting
+        # Create hyper-stripped player keys using the nickname dictionary
         player_teams = dict(zip(roster_df['Name'].apply(get_player_key), roster_df['Team']))
         
-        # Look up the captain's team status first
         captain_game_time = None
         if selected_team:
             for _, game in daily_games_df.iterrows():
                 if fuzzy_match_team(selected_team, game['Home']) or fuzzy_match_team(selected_team, game['Away']):
-                    # Clean up weird unicode characters from the schedule sheet
                     raw_time = str(game['Time'])
                     clean_time = re.sub(r'[^a-zA-Z0-9:]', ' ', raw_time)
                     clean_time = re.sub(r'\s+', ' ', clean_time).strip()
@@ -323,7 +360,6 @@ if check_schedule and target_date:
                     captain_game_time = f"{clean_time} ({clean_rink})"
                     break
         
-        # Display the Captain's game context if found
         if captain_game_time:
             st.info(f"📍 **Your Game Today:** {selected_team} plays at {captain_game_time}.")
         
@@ -336,7 +372,6 @@ if check_schedule and target_date:
                 
             for _, game in daily_games_df.iterrows():
                 if fuzzy_match_team(team_name, game['Home']) or fuzzy_match_team(team_name, game['Away']):
-                    # Clean up the status text to prevent character encoding issues
                     raw_time = str(game['Time'])
                     clean_time = re.sub(r'[^a-zA-Z0-9:]', ' ', raw_time)
                     clean_time = re.sub(r'\s+', ' ', clean_time).strip()
@@ -348,7 +383,6 @@ if check_schedule and target_date:
             
         eligible["Schedule Status"] = eligible["Name"].apply(get_game_status)
     else:
-        # Fallback if no games are found
         eligible["Schedule Status"] = "Free"
         
     display_cols.insert(1, "Schedule Status")
