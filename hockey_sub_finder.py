@@ -27,11 +27,11 @@ LEAGUE_CONFIG = {
     },
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
     },
     "OFHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
     }
 }
 
@@ -125,7 +125,7 @@ def normalize_subs(df):
         if optional_column in subs.columns:
             display_columns.append(optional_column)
             
-    return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True])
+    return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True]).copy()
 
 def normalize_rosters(df):
     df = df.rename(columns=lambda x: str(x).strip())
@@ -145,7 +145,7 @@ def normalize_rosters(df):
     roster["Name"] = roster["Name"].apply(fix_name).map(clean_text)
     roster["JoinKey"] = roster["Name"].apply(normalize_name)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
-    return roster.dropna(subset=["Name", "Rating"]).sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
+    return roster.dropna(subset=["Name", "Rating"]).sort_values(["Team", "Rating", "Name"], ascending=[True, False, True]).copy()
 
 @st.cache_data(ttl=300)
 def get_daily_schedule(target_date):
