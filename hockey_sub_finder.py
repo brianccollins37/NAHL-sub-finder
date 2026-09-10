@@ -12,7 +12,6 @@ try:
 except ImportError:
     certifi = None
 
-
 st.set_page_config(
     page_title="Hockey Sub Finder",
     layout="wide",
@@ -39,40 +38,15 @@ LEAGUE_CONFIG = {
 MASTER_SCHEDULE_URL = "https://docs.google.com/spreadsheets/d/1wi75UkV9rdhvsys2dAVDG2n1B0bGznIE1wISeLoUBWM/export?format=csv&gid=0"
 
 NICKNAME_MAP = {
-    "dan": "daniel",
-    "danny": "daniel",
-    "jim": "james",
-    "jimmy": "james",
-    "bob": "robert",
-    "rob": "robert",
-    "bobby": "robert",
-    "robby": "robert",
-    "bill": "william",
-    "billy": "william",
-    "will": "william",
-    "willie": "william",
-    "mike": "michael",
-    "mikey": "michael",
-    "steve": "stephen",
-    "steven": "stephen",
-    "tom": "thomas",
-    "tommy": "thomas",
-    "matt": "matthew",
-    "matty": "matthew",
-    "chris": "christopher",
-    "dave": "david",
-    "davy": "david",
-    "joe": "joseph",
-    "joey": "joseph",
-    "jon": "jonathan",
-    "tim": "timothy",
-    "timmy": "timothy",
-    "ed": "edward",
-    "eddie": "edward",
-    "ben": "benjamin",
-    "benny": "benjamin",
-    "sam": "samuel",
-    "sammy": "samuel"
+    "dan": "daniel", "danny": "daniel", "jim": "james", "jimmy": "james",
+    "bob": "robert", "rob": "robert", "bobby": "robert", "robby": "robert",
+    "bill": "william", "billy": "william", "will": "william", "willie": "william",
+    "mike": "michael", "mikey": "michael", "steve": "stephen", "steven": "stephen",
+    "tom": "thomas", "tommy": "thomas", "matt": "matthew", "matty": "matthew",
+    "chris": "christopher", "dave": "david", "davy": "david", "joe": "joseph",
+    "joey": "joseph", "jon": "jonathan", "tim": "timothy", "timmy": "timothy",
+    "ed": "edward", "eddie": "edward", "ben": "benjamin", "benny": "benjamin",
+    "sam": "samuel", "sammy": "samuel"
 }
 
 def clean_text(value):
@@ -93,7 +67,6 @@ def fuzzy_match_team(team1, team2):
     
     if not t1 or not t2:
         return False
-        
     if t1 in t2 or t2 in t1:
         return True
         
@@ -160,7 +133,16 @@ def normalize_rosters(df):
         df = df.rename(columns={"Pos": "Position"})
     
     roster = df.copy()
-    roster["Name"] = roster["Name"].map(clean_text)
+    
+    def fix_name(name):
+        name_str = str(name).strip()
+        if "," in name_str:
+            parts = name_str.split(",")
+            if len(parts) >= 2:
+                return f"{parts[1].strip()} {parts[0].strip()}"
+        return name_str
+        
+    roster["Name"] = roster["Name"].apply(fix_name).map(clean_text)
     roster["JoinKey"] = roster["Name"].apply(normalize_name)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
     return roster.dropna(subset=["Name", "Rating"]).sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
@@ -171,8 +153,15 @@ def get_daily_schedule(target_date):
     
     date_str_1 = f"{target_date.month}/{target_date.day}"
     date_str_2 = f"{target_date.month:02d}/{target_date.day:02d}"
+    date_str_3 = f"{target_date.year}-{target_date.month:02d}-{target_date.day:02d}"
+    date_str_4 = f"{target_date.year}-{target_date.month}-{target_date.day}"
     
-    today_games = df[(df["Date"] == date_str_1) | (df["Date"] == date_str_2)]
+    today_games = df[
+        (df["Date"] == date_str_1) | 
+        (df["Date"] == date_str_2) |
+        (df["Date"] == date_str_3) |
+        (df["Date"] == date_str_4)
+    ]
     
     schedule_map = {}
     for _, row in today_games.iterrows():
