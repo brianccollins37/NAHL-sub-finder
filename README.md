@@ -18,7 +18,6 @@ The app lets you select a team, choose the missing player from that team's roste
 - **Fuzzy Team Matching:** Smoothly handles slight variations in team names between the Roster Sheet and the Master Schedule (e.g., matching `Disco Biscuits - Hilborn` to `Disco Biscuits`).
 - **Player Nickname Mapping:** Automatically reconciles common first name variations across different data sources (e.g., matching "Dan" to "Daniel" or "Jim" to "James") to guarantee players are recognized accurately.
 - **Rating Filtering:** Shows subs whose rating is equal to or lower than the missing player's rating. Includes a customizable minimum rating filter to keep lists manageable.
-- **Playoffs Mode:** When `Playoffs` is checked, eligible subs must be at least one rating point lower than the missing player.
 - **Position Filtering:** Goalie replacements only show goalies; skater replacements hide goalies. Supports the "E" (Either F/D) position for CVHL and OFHL.
 - **League-Specific Eligibility:** Automatically enforces NAHL-specific rules (requiring the `NA` column to be `Y`). CVHL and OFHL do not require this flag.
 - **Same-Team Exclusion:** Removes players from the selected missing player's team from the eligible sub list.
