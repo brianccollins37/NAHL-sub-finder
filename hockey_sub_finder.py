@@ -27,11 +27,11 @@ LEAGUE_CONFIG = {
     },
     "CVHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/1EG4O-c6YaAcij24OjtSFlyPNq9jKjYjSFIKSGZNfS7k/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
     },
     "OFHL": {
         "Sub_Sheet": "https://docs.google.com/spreadsheets/d/16MuuVSUj3RCyiDCkypRjA3B31cfe0VRaH-Fn4N4xfBg/export?format=csv&gid=0",
-        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/1nI3pRgXvVDeK7RPM7chCPAhOm4RvdVFq5C_QrZDsf-0/export?format=csv&gid=0",
+        "Roster_Sheet": "https://docs.google.com/spreadsheets/d/19OdJi43MGv1yCEN3eU4qw6LPH5maZKVzRScZytnfJCk/export?format=csv&gid=0",
     }
 }
 
@@ -192,13 +192,6 @@ config = LEAGUE_CONFIG[league]
 try:
     subs_df = load_subs(config["Sub_Sheet"])
     roster_df = load_roster(config["Roster_Sheet"])
-    
-    # Bulletproof fail-safes in case caching drops columns
-    if "JoinKey" not in subs_df.columns:
-        subs_df["JoinKey"] = subs_df["Name"].apply(normalize_name)
-    if "JoinKey" not in roster_df.columns:
-        roster_df["JoinKey"] = roster_df["Name"].apply(normalize_name)
-        
 except Exception as error:
     st.error(f"Could not load the {league} sheets: {error}")
     st.stop()
@@ -265,12 +258,6 @@ if is_goalie(target_position):
     eligible = eligible[eligible["Position"].map(is_goalie)]
 else:
     eligible = eligible[~eligible["Position"].map(is_goalie)]
-
-# Fallback column generation before filtering
-if "JoinKey" not in eligible.columns:
-    eligible["JoinKey"] = eligible["Name"].apply(normalize_name)
-if "JoinKey" not in roster_df.columns:
-    roster_df["JoinKey"] = roster_df["Name"].apply(normalize_name)
 
 current_team_keys = set(roster_df.loc[roster_df["Team"] == selected_team, "JoinKey"])
 eligible = eligible[~eligible["JoinKey"].isin(current_team_keys)]
