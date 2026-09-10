@@ -125,7 +125,7 @@ def normalize_subs(df):
         if optional_column in subs.columns:
             display_columns.append(optional_column)
             
-    return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True])
+    return subs[display_columns + ["JoinKey"]].sort_values(["Rating", "Name"], ascending=[False, True]).copy()
 
 def normalize_rosters(df):
     df = df.rename(columns=lambda x: str(x).strip())
@@ -145,7 +145,7 @@ def normalize_rosters(df):
     roster["Name"] = roster["Name"].apply(fix_name).map(clean_text)
     roster["JoinKey"] = roster["Name"].apply(normalize_name)
     roster["Rating"] = pd.to_numeric(roster["Rating"], errors="coerce")
-    return roster.dropna(subset=["Name", "Rating"]).sort_values(["Team", "Rating", "Name"], ascending=[True, False, True])
+    return roster.dropna(subset=["Name", "Rating"]).sort_values(["Team", "Rating", "Name"], ascending=[True, False, True]).copy()
 
 @st.cache_data(ttl=300)
 def get_daily_schedule(target_date):
@@ -192,6 +192,13 @@ config = LEAGUE_CONFIG[league]
 try:
     subs_df = load_subs(config["Sub_Sheet"])
     roster_df = load_roster(config["Roster_Sheet"])
+    
+    # Bulletproof fail-safes in case caching drops columns
+    if "JoinKey" not in subs_df.columns:
+        subs_df["JoinKey"] = subs_df["Name"].apply(normalize_name)
+    if "JoinKey" not in roster_df.columns:
+        roster_df["JoinKey"] = roster_df["Name"].apply(normalize_name)
+        
 except Exception as error:
     st.error(f"Could not load the {league} sheets: {error}")
     st.stop()
@@ -258,6 +265,12 @@ if is_goalie(target_position):
     eligible = eligible[eligible["Position"].map(is_goalie)]
 else:
     eligible = eligible[~eligible["Position"].map(is_goalie)]
+
+# Fallback column generation before filtering
+if "JoinKey" not in eligible.columns:
+    eligible["JoinKey"] = eligible["Name"].apply(normalize_name)
+if "JoinKey" not in roster_df.columns:
+    roster_df["JoinKey"] = roster_df["Name"].apply(normalize_name)
 
 current_team_keys = set(roster_df.loc[roster_df["Team"] == selected_team, "JoinKey"])
 eligible = eligible[~eligible["JoinKey"].isin(current_team_keys)]
