@@ -38,15 +38,31 @@ LEAGUE_CONFIG = {
 MASTER_SCHEDULE_URL = "https://docs.google.com/spreadsheets/d/1wi75UkV9rdhvsys2dAVDG2n1B0bGznIE1wISeLoUBWM/export?format=csv&gid=0"
 
 NICKNAME_MAP = {
-    "dan": "daniel", "danny": "daniel", "jim": "james", "jimmy": "james",
+    "al": "alan", "art": "arthur", "artie": "arthur", "andy": "andrew", "drew": "andrew",
+    "ben": "benjamin", "benny": "benjamin", "brad": "bradley",
     "bob": "robert", "rob": "robert", "bobby": "robert", "robby": "robert",
-    "bill": "william", "billy": "william", "will": "william", "willie": "william",
-    "mike": "michael", "mikey": "michael", "steve": "stephen", "steven": "stephen",
-    "tom": "thomas", "tommy": "thomas", "matt": "matthew", "matty": "matthew",
-    "chris": "christopher", "dave": "david", "davy": "david", "joe": "joseph",
-    "joey": "joseph", "jon": "jonathan", "tim": "timothy", "timmy": "timothy",
-    "ed": "edward", "eddie": "edward", "ben": "benjamin", "benny": "benjamin",
-    "sam": "samuel", "sammy": "samuel"
+    "bill": "william", "billy": "william", "will": "william", "willie": "william", "willy": "william",
+    "cal": "calvin", "chris": "christopher", "chuck": "charles", "charlie": "charles", "chip": "charles",
+    "dan": "daniel", "danny": "daniel", "dave": "david", "davy": "david",
+    "don": "donald", "donny": "donald", "doug": "douglas", "dick": "richard",
+    "ed": "edward", "eddie": "edward", "ted": "edward", "teddy": "edward",
+    "frank": "francis", "frankie": "francis", "fred": "frederick", "freddy": "frederick",
+    "greg": "gregory", "gregg": "gregory", "geoff": "jeffrey", "jeff": "jeffrey",
+    "hal": "harold", "harry": "henry", 
+    "jim": "james", "jimmy": "james", "jamie": "james",
+    "joe": "joseph", "joey": "joseph", 
+    "john": "jonathan", "johnny": "jonathan", "jon": "jonathan", "jack": "john",
+    "ken": "kenneth", "kenny": "kenneth", "larry": "lawrence", "leo": "leonard",
+    "matt": "matthew", "matty": "matthew", "mike": "michael", "mikey": "michael",
+    "nick": "nicholas", "nicky": "nicholas", 
+    "pat": "patrick", "paddy": "patrick", "pete": "peter", "petey": "peter",
+    "phil": "philip", "philly": "philip", 
+    "rich": "richard", "rick": "richard", "ricky": "richard", 
+    "ron": "ronald", "ronny": "ronald", 
+    "sam": "samuel", "sammy": "samuel", "stan": "stanley",
+    "steve": "stephen", "steven": "stephen", "stu": "stuart",
+    "tom": "thomas", "tommy": "thomas", "tim": "timothy", "timmy": "timothy",
+    "tony": "anthony", "zach": "zachary", "zack": "zachary"
 }
 
 def clean_text(value):
@@ -54,12 +70,17 @@ def clean_text(value):
     return re.sub(r"\s+", " ", value).strip()
 
 def normalize_name(name):
-    clean = re.sub(r'[^a-zA-Z]', '', str(name).lower())
-    for nick, real in NICKNAME_MAP.items():
-        if clean.startswith(nick):
-            clean = clean.replace(nick, real, 1)
-            break
-    return clean
+    # Strip everything except letters and spaces, then convert to lowercase
+    clean = re.sub(r'[^a-z\s]', '', str(name).lower())
+    parts = clean.split()
+    
+    if parts:
+        # Check if the exact first name is in our dictionary
+        if parts[0] in NICKNAME_MAP:
+            parts[0] = NICKNAME_MAP[parts[0]]
+            
+    # Re-join with no spaces for the final JoinKey
+    return "".join(parts)
 
 def fuzzy_match_team(team1, team2):
     t1 = re.sub(r'[^a-z0-9]', '', str(team1).lower())
